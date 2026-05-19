@@ -1,36 +1,89 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# GOP V2
 
-## Getting Started
+Sistema interno para controle de presença, colaboradores, usuários e auditoria.
 
-First, run the development server:
+O GOP V2 foi construído com Next.js, React e Supabase. Ele atende um fluxo operacional simples: manter a base de colaboradores, registrar chamadas por supervisor, acompanhar o resumo diário e auditar alterações críticas.
+
+## Funcionalidades
+
+- Login e recuperação de senha via Supabase Auth.
+- Dashboard com resumo diário de presença.
+- Chamada diária por supervisor.
+- Lançamento de exceções: falta, atraso, atestado, folga, férias e afastamento.
+- Finalização de chamada.
+- Cadastro e edição de colaboradores.
+- Cadastro, edição, ativação e inativação de usuários.
+- Controle de acesso por perfil: admin, RH e supervisor.
+- Auditoria interna de alterações críticas.
+- Data operacional padronizada para `America/Sao_Paulo`.
+- Scripts de validação, build e checagem de segurança.
+
+## Perfis
+
+| Perfil | Acesso |
+| --- | --- |
+| Admin | Dashboard, chamada, colaboradores e usuários |
+| RH | Dashboard e colaboradores |
+| Supervisor | Dashboard, chamada e colaboradores |
+
+## Rotas
+
+| Rota | Descrição |
+| --- | --- |
+| `/login` | Entrada no sistema e solicitação de recuperação de senha |
+| `/resetar-senha` | Criação de nova senha após recuperação |
+| `/` | Dashboard geral |
+| `/chamada` | Registro e finalização da chamada |
+| `/colaboradores` | Cadastro base de colaboradores |
+| `/usuarios` | Gestão de usuários, apenas admin |
+| `/acesso-negado` | Tela de bloqueio por perfil inválido |
+
+## Requisitos
+
+- Node.js compatível com Next.js 16.
+- Projeto Supabase configurado.
+- Variáveis em `.env.local`.
+
+```env
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+```
+
+## Instalação
+
+```bash
+npm install
+npm run dev
+```
+
+Abra `http://localhost:3000`.
+
+## Scripts
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm run lint
+npm run test
+npm run build
+npm run security:check
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+`npm run security:check` valida se pontos essenciais existem no Supabase real. Ele depende das variáveis do `.env.local`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Supabase
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Antes de produção, execute os SQLs:
 
-## Learn More
+1. `supabase/sql/001_security_audit_rls.sql`
+2. `supabase/sql/002_verify_security.sql`
 
-To learn more about Next.js, take a look at the following resources:
+O primeiro cria/ajusta funções, auditoria, timezone e policies. O segundo ajuda a conferir se o banco ficou pronto.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Documentação
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- [Visão Geral](docs/OVERVIEW.md)
+- [Manual do Usuário](docs/USER_GUIDE.md)
+- [Manual Administrativo](docs/ADMIN_GUIDE.md)
+- [Arquitetura e Segurança](docs/TECHNICAL_GUIDE.md)
+- [Checklist de Produção](docs/PRODUCTION_READINESS.md)
