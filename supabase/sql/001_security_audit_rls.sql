@@ -98,6 +98,18 @@ create table if not exists gop_v2.audit_logs (
   created_at timestamptz not null default now()
 );
 
+alter table gop_v2.audit_logs
+  add column if not exists actor_user_id uuid,
+  add column if not exists actor_profile_id uuid,
+  add column if not exists actor_role text,
+  add column if not exists entidade text,
+  add column if not exists entidade_id text,
+  add column if not exists acao text,
+  add column if not exists detalhes jsonb not null default '{}'::jsonb,
+  add column if not exists ip inet,
+  add column if not exists user_agent text,
+  add column if not exists created_at timestamptz not null default now();
+
 create index if not exists audit_logs_created_at_idx
   on gop_v2.audit_logs (created_at desc);
 
