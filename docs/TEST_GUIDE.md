@@ -4,7 +4,7 @@
 
 Preencha aqui a URL do ambiente que sera testado:
 
-`URL: ________________________________________________`
+`URL: https://gop-v2.vercel.app/ `
 
 ## Dados de login
 
