@@ -10,14 +10,14 @@ Preencha aqui a URL do ambiente que sera testado:
 
 Use o usuario administrador abaixo para acessar o sistema e testar todas as funcionalidades disponiveis:
 
-- E-mail: `admin@teste.com`
+- E-mail: `supervisor.teste@empresa.com`
 - Senha: `admin`
 
 ## Como entrar no sistema
 
 1. Acesse a URL do sistema no navegador.
 2. Se o sistema nao abrir direto na tela de login, clique ou navegue para `/login`.
-3. Informe o e-mail `admin@teste.com`.
+3. Informe o e-mail `supervisor.teste@empresa.com`.
 4. Informe a senha `admin`.
 5. Clique no botao de entrar.
 
@@ -102,7 +102,7 @@ Para encerrar o teste, clique no botao `Sair`. No computador, ele fica no final 
 
 Use este checklist para confirmar que as principais funcionalidades foram testadas:
 
-- Login com `admin@teste.com`.
+- Login com `supervisor.teste@empresa.com`.
 - Visualizacao do Dashboard.
 - Alteracao de data na Chamada.
 - Lancamento de falta, atraso, atestado, folga, ferias ou afastamento.
