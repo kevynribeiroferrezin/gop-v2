@@ -84,6 +84,7 @@ O primeiro cria/ajusta funções, auditoria, timezone e policies. O segundo ajud
 
 - [Visão Geral](docs/OVERVIEW.md)
 - [Manual do Usuário](docs/USER_GUIDE.md)
+- [Guia de Acesso e Testes](docs/TEST_GUIDE.md)
 - [Manual Administrativo](docs/ADMIN_GUIDE.md)
 - [Arquitetura e Segurança](docs/TECHNICAL_GUIDE.md)
 - [Checklist de Produção](docs/PRODUCTION_READINESS.md)
