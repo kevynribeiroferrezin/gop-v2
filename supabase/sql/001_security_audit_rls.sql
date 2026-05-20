@@ -65,6 +65,25 @@ $$;
 
 grant execute on function gop_v2.is_rh_or_admin() to authenticated, service_role;
 
+create or replace function gop_v2.current_supervisor_id()
+returns uuid
+language sql
+stable
+security definer
+set search_path = gop_v2, public
+as $$
+  select s.id
+  from gop_v2.supervisores s
+  join gop_v2.profiles p on p.id = s.profile_id
+  where p.user_id = auth.uid()
+    and p.ativo = true
+    and p.role = 'supervisor'
+    and s.ativo = true
+  limit 1;
+$$;
+
+grant execute on function gop_v2.current_supervisor_id() to authenticated, service_role;
+
 create table if not exists gop_v2.audit_logs (
   id uuid primary key default gen_random_uuid(),
   actor_user_id uuid,
@@ -117,11 +136,15 @@ using (gop_v2.is_admin())
 with check (gop_v2.is_admin());
 
 drop policy if exists "supervisores_select_auth" on gop_v2.supervisores;
-create policy "supervisores_select_auth"
+drop policy if exists "supervisores_select_by_role" on gop_v2.supervisores;
+create policy "supervisores_select_by_role"
 on gop_v2.supervisores
 for select
 to authenticated
-using (true);
+using (
+  gop_v2.is_rh_or_admin()
+  or profile_id = gop_v2.current_profile_id()
+);
 
 drop policy if exists "supervisores_admin_write" on gop_v2.supervisores;
 create policy "supervisores_admin_write"
@@ -132,11 +155,15 @@ using (gop_v2.is_admin())
 with check (gop_v2.is_admin());
 
 drop policy if exists "funcionarios_select_auth" on gop_v2.funcionarios;
-create policy "funcionarios_select_auth"
+drop policy if exists "funcionarios_select_by_role" on gop_v2.funcionarios;
+create policy "funcionarios_select_by_role"
 on gop_v2.funcionarios
 for select
 to authenticated
-using (true);
+using (
+  gop_v2.is_rh_or_admin()
+  or supervisor_id = gop_v2.current_supervisor_id()
+);
 
 drop policy if exists "funcionarios_rh_admin_write" on gop_v2.funcionarios;
 create policy "funcionarios_rh_admin_write"
@@ -147,34 +174,66 @@ using (gop_v2.is_rh_or_admin())
 with check (gop_v2.is_rh_or_admin());
 
 drop policy if exists "presencas_select_auth" on gop_v2.presencas;
-create policy "presencas_select_auth"
+drop policy if exists "presencas_select_by_role" on gop_v2.presencas;
+create policy "presencas_select_by_role"
 on gop_v2.presencas
 for select
 to authenticated
-using (true);
+using (
+  gop_v2.is_rh_or_admin()
+  or supervisor_id = gop_v2.current_supervisor_id()
+);
 
 drop policy if exists "presencas_admin_supervisor_write" on gop_v2.presencas;
 create policy "presencas_admin_supervisor_write"
 on gop_v2.presencas
 for all
 to authenticated
-using (gop_v2.current_role() in ('admin', 'supervisor'))
-with check (gop_v2.current_role() in ('admin', 'supervisor'));
+using (
+  gop_v2.is_admin()
+  or (
+    gop_v2.current_role() = 'supervisor'
+    and supervisor_id = gop_v2.current_supervisor_id()
+  )
+)
+with check (
+  gop_v2.is_admin()
+  or (
+    gop_v2.current_role() = 'supervisor'
+    and supervisor_id = gop_v2.current_supervisor_id()
+  )
+);
 
 drop policy if exists "fechamentos_select_auth" on gop_v2.fechamentos_chamada;
-create policy "fechamentos_select_auth"
+drop policy if exists "fechamentos_select_by_role" on gop_v2.fechamentos_chamada;
+create policy "fechamentos_select_by_role"
 on gop_v2.fechamentos_chamada
 for select
 to authenticated
-using (true);
+using (
+  gop_v2.is_rh_or_admin()
+  or supervisor_id = gop_v2.current_supervisor_id()
+);
 
 drop policy if exists "fechamentos_admin_supervisor_write" on gop_v2.fechamentos_chamada;
 create policy "fechamentos_admin_supervisor_write"
 on gop_v2.fechamentos_chamada
 for all
 to authenticated
-using (gop_v2.current_role() in ('admin', 'supervisor'))
-with check (gop_v2.current_role() in ('admin', 'supervisor'));
+using (
+  gop_v2.is_admin()
+  or (
+    gop_v2.current_role() = 'supervisor'
+    and supervisor_id = gop_v2.current_supervisor_id()
+  )
+)
+with check (
+  gop_v2.is_admin()
+  or (
+    gop_v2.current_role() = 'supervisor'
+    and supervisor_id = gop_v2.current_supervisor_id()
+  )
+);
 
 drop policy if exists "cargos_select_auth" on gop_v2.cargos;
 create policy "cargos_select_auth"

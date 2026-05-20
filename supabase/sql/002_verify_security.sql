@@ -34,8 +34,16 @@ select gop_v2.hoje_brasil() as data_brasil;
 select
   exists (
     select 1
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'gop_v2'
+      and p.proname = 'current_supervisor_id'
+  ) as current_supervisor_id_existe;
+
+select
+  exists (
+    select 1
     from information_schema.tables
     where table_schema = 'gop_v2'
       and table_name = 'audit_logs'
   ) as audit_logs_existe;
-
