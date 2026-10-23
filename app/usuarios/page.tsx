@@ -1,12 +1,13 @@
 "use client";
 
-import Sidebar from "../../src/components/Sidebar";
+import AppShell, { PageLoading } from "../../src/components/AppShell";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Loader2, Search, ShieldCheck } from "lucide-react";
+import { Search, ShieldCheck } from "lucide-react";
 import { supabase } from "../../src/lib/supabase/client";
 import { GENERIC_DATA_ERROR, GENERIC_SAVE_ERROR } from "../../src/lib/errors";
 import { registrarAuditoria } from "../../src/lib/audit";
+import type { Role } from "../../src/lib/workspace-types";
 import { validarSenhaForte } from "../../src/lib/password";
 
 type Usuario = {
@@ -14,10 +15,9 @@ type Usuario = {
   user_id: string;
   nome: string;
   email: string;
-  role: "admin" | "supervisor" | "rh";
+  role: Role;
   ativo: boolean;
   created_at: string;
-  updated_at: string;
 };
 
 export default function UsuariosPage() {
@@ -40,13 +40,13 @@ export default function UsuariosPage() {
     email: "",
     senha: "",
     confirmarSenha: "",
-    role: "supervisor" as "admin" | "supervisor" | "rh",
+    role: "supervisor" as Role,
     codigoSupervisor: "",
   });
 
   const [formEdicao, setFormEdicao] = useState({
     nome: "",
-    role: "supervisor" as "admin" | "supervisor" | "rh",
+    role: "supervisor" as Role,
     ativo: true,
     codigoSupervisor: "",
     novaSenha: "",
@@ -92,7 +92,7 @@ export default function UsuariosPage() {
 
     const { data, error } = await supabase
       .from("profiles")
-      .select("id, user_id, nome, email, role, ativo, created_at, updated_at")
+      .select("id, user_id, nome, email, role, ativo, created_at")
       .order("nome", { ascending: true });
 
     if (error) {
@@ -289,7 +289,7 @@ export default function UsuariosPage() {
       .eq("id", usuarioEditando.id);
 
     if (profileError) {
-      setErro(profileError.message);
+      setErro(GENERIC_SAVE_ERROR);
       setSalvando(false);
       return;
     }
@@ -303,7 +303,7 @@ export default function UsuariosPage() {
           .maybeSingle();
 
       if (supervisorBuscaError) {
-        setErro(supervisorBuscaError.message);
+        setErro(GENERIC_SAVE_ERROR);
         setSalvando(false);
         return;
       }
@@ -320,7 +320,7 @@ export default function UsuariosPage() {
           .eq("id", supervisorExistente.id);
 
         if (supervisorUpdateError) {
-          setErro(supervisorUpdateError.message);
+          setErro(GENERIC_SAVE_ERROR);
           setSalvando(false);
           return;
         }
@@ -336,7 +336,7 @@ export default function UsuariosPage() {
           });
 
         if (supervisorInsertError) {
-          setErro(supervisorInsertError.message);
+          setErro(GENERIC_SAVE_ERROR);
           setSalvando(false);
           return;
         }
@@ -474,6 +474,7 @@ export default function UsuariosPage() {
   function labelPerfil(role: string) {
     if (role === "admin") return "Administrador";
     if (role === "rh") return "RH";
+    if (role === "coordenador") return "Coordenador";
     if (role === "supervisor") return "Supervisor";
     return role;
   }
@@ -490,38 +491,18 @@ export default function UsuariosPage() {
     return "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200";
   }
 
-  if (carregando) {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-[#f6f7fb] dark:bg-slate-950">
-        <div className="flex items-center gap-3 rounded-2xl bg-white px-8 py-6 text-sm font-semibold text-slate-600 shadow-sm dark:bg-slate-900 dark:text-slate-300">
-          <Loader2 className="animate-spin text-yellow-500" size={20} />
-          Carregando usuários...
-        </div>
-      </main>
-    );
-  }
+  if (carregando) return <PageLoading active="usuarios" message="Carregando usuários…" />;
 
   return (
-    <main className="min-h-screen bg-[#f6f7fb] pb-24 dark:bg-slate-950 lg:pb-0">
-      <div className="flex min-h-screen">
-        <Sidebar active="usuarios" />
-
-        <section className="flex-1 p-4 lg:p-8">
+    <AppShell active="usuarios">
           <header className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <button
-                onClick={() => router.push("/")}
-                className="mb-4 flex items-center gap-2 text-sm font-semibold text-slate-500 transition hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100"
-              >
-                <ArrowLeft size={18} />
-                Voltar ao dashboard
-              </button>
 
               <p className="text-sm font-semibold text-yellow-600">
                 Acessos do sistema
               </p>
 
-              <h1 className="mt-1 text-3xl font-black text-slate-900 dark:text-slate-100">
+              <h1 className="mt-1 text-3xl font-semibold text-slate-900 dark:text-slate-100">
                 Usuários
               </h1>
 
@@ -539,7 +520,7 @@ export default function UsuariosPage() {
                   setUsuarioEditando(null);
                   setModoCadastro(true);
                 }}
-                className="rounded-xl bg-yellow-500 px-5 py-3 text-sm font-black text-slate-950 shadow-[0_10px_25px_rgba(234,179,8,0.25)] transition hover:bg-yellow-400"
+                className="rounded-xl bg-yellow-500 px-5 py-3 text-sm font-semibold text-slate-950 shadow-sm transition hover:bg-yellow-400"
               >
                 Novo usuário
               </button>
@@ -566,19 +547,19 @@ export default function UsuariosPage() {
                     Novo acesso
                   </p>
 
-                  <h2 className="mt-1 text-2xl font-black text-slate-900 dark:text-slate-100">
+                  <h2 className="mt-1 text-2xl font-semibold text-slate-900 dark:text-slate-100">
                     Cadastrar usuário
                   </h2>
 
                   <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                    Crie um novo acesso para administrador, RH ou supervisor.
+                    Crie um acesso para administrador, coordenador, RH ou supervisor.
                   </p>
                 </div>
 
                 <button
                   type="button"
                   onClick={() => setModoCadastro(false)}
-                  className="rounded-xl border border-slate-200 px-5 py-3 text-sm font-black text-slate-600 transition hover:bg-slate-50 dark:border-slate-800 dark:text-slate-300 dark:hover:bg-slate-800"
+                  className="rounded-xl border border-slate-200 px-5 py-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 dark:border-slate-800 dark:text-slate-300 dark:hover:bg-slate-800"
                 >
                   Voltar para lista
                 </button>
@@ -587,11 +568,10 @@ export default function UsuariosPage() {
               <form onSubmit={cadastrarUsuario} className="space-y-5">
                 <div className="grid gap-4 md:grid-cols-2">
                   <div>
-                    <label className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
+                    <label htmlFor="usuarios-field-1" className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
                       Nome completo
                     </label>
-
-                    <input
+<input id="usuarios-field-1"
                       value={form.nome}
                       onChange={(event) =>
                         setForm((atual) => ({
@@ -605,11 +585,10 @@ export default function UsuariosPage() {
                   </div>
 
                   <div>
-                    <label className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
+                    <label htmlFor="usuarios-field-2" className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
                       E-mail
                     </label>
-
-                    <input
+<input id="usuarios-field-2"
                       type="email"
                       value={form.email}
                       onChange={(event) =>
@@ -624,11 +603,10 @@ export default function UsuariosPage() {
                   </div>
 
                   <div>
-                    <label className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
+                    <label htmlFor="usuarios-field-3" className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
                       Senha
                     </label>
-
-                    <input
+<input id="usuarios-field-3"
                       type="password"
                       value={form.senha}
                       onChange={(event) =>
@@ -643,11 +621,10 @@ export default function UsuariosPage() {
                   </div>
 
                   <div>
-                    <label className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
+                    <label htmlFor="usuarios-field-4" className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
                       Confirmar senha
                     </label>
-
-                    <input
+<input id="usuarios-field-4"
                       type="password"
                       value={form.confirmarSenha}
                       onChange={(event) =>
@@ -662,24 +639,21 @@ export default function UsuariosPage() {
                   </div>
 
                   <div>
-                    <label className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
+                    <label htmlFor="usuarios-field-5" className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
                       Perfil
                     </label>
-
-                    <select
+<select id="usuarios-field-5"
                       value={form.role}
                       onChange={(event) =>
                         setForm((atual) => ({
                           ...atual,
-                          role: event.target.value as
-                            | "admin"
-                            | "supervisor"
-                            | "rh",
+                          role: event.target.value as Role,
                         }))
                       }
                       className="h-11 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none focus:border-yellow-500 focus:ring-4 focus:ring-yellow-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                     >
-                      <option value="supervisor">Supervisor</option>
+                      <option value="coordenador">Coordenador</option>
+<option value="supervisor">Supervisor</option>
                       <option value="rh">RH</option>
                       <option value="admin">Administrador</option>
                     </select>
@@ -687,11 +661,10 @@ export default function UsuariosPage() {
 
                   {form.role === "supervisor" && (
                     <div>
-                      <label className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
+                      <label htmlFor="usuarios-field-6" className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
                         Código do supervisor
                       </label>
-
-                      <input
+<input id="usuarios-field-6"
                         value={form.codigoSupervisor}
                         onChange={(event) =>
                           setForm((atual) => ({
@@ -710,7 +683,7 @@ export default function UsuariosPage() {
                   <button
                     type="button"
                     onClick={() => setModoCadastro(false)}
-                    className="rounded-xl border border-slate-200 px-5 py-3 text-sm font-black text-slate-600 transition hover:bg-slate-50 dark:border-slate-800 dark:text-slate-300 dark:hover:bg-slate-800"
+                    className="rounded-xl border border-slate-200 px-5 py-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 dark:border-slate-800 dark:text-slate-300 dark:hover:bg-slate-800"
                   >
                     Cancelar
                   </button>
@@ -718,7 +691,7 @@ export default function UsuariosPage() {
                   <button
                     type="submit"
                     disabled={salvando}
-                    className="rounded-xl bg-yellow-500 px-5 py-3 text-sm font-black text-slate-950 shadow-[0_10px_25px_rgba(234,179,8,0.25)] transition hover:bg-yellow-400 disabled:cursor-not-allowed disabled:opacity-60"
+                    className="rounded-xl bg-yellow-500 px-5 py-3 text-sm font-semibold text-slate-950 shadow-sm transition hover:bg-yellow-400 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {salvando ? "Salvando..." : "Salvar usuário"}
                   </button>
@@ -733,7 +706,7 @@ export default function UsuariosPage() {
                     Editar acesso
                   </p>
 
-                  <h2 className="mt-1 text-2xl font-black text-slate-900 dark:text-slate-100">
+                  <h2 className="mt-1 text-2xl font-semibold text-slate-900 dark:text-slate-100">
                     Editar usuário
                   </h2>
 
@@ -748,7 +721,7 @@ export default function UsuariosPage() {
                     setModoEdicao(false);
                     setUsuarioEditando(null);
                   }}
-                  className="rounded-xl border border-slate-200 px-5 py-3 text-sm font-black text-slate-600 transition hover:bg-slate-50 dark:border-slate-800 dark:text-slate-300 dark:hover:bg-slate-800"
+                  className="rounded-xl border border-slate-200 px-5 py-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 dark:border-slate-800 dark:text-slate-300 dark:hover:bg-slate-800"
                 >
                   Voltar para lista
                 </button>
@@ -757,11 +730,10 @@ export default function UsuariosPage() {
               <form onSubmit={salvarEdicaoUsuario} className="space-y-5">
                 <div className="grid gap-4 md:grid-cols-2">
                   <div>
-                    <label className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
+                    <label htmlFor="usuarios-field-7" className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
                       Nome completo
                     </label>
-
-                    <input
+<input id="usuarios-field-7"
                       value={formEdicao.nome}
                       onChange={(event) =>
                         setFormEdicao((atual) => ({
@@ -775,11 +747,10 @@ export default function UsuariosPage() {
                   </div>
 
                   <div>
-                    <label className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
+                    <label htmlFor="usuarios-field-8" className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
                       E-mail
                     </label>
-
-                    <input
+<input id="usuarios-field-8"
                       value={usuarioEditando?.email ?? ""}
                       disabled
                       className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 text-sm text-slate-500 outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-400"
@@ -787,35 +758,31 @@ export default function UsuariosPage() {
                   </div>
 
                   <div>
-                    <label className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
+                    <label htmlFor="usuarios-field-9" className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
                       Perfil
                     </label>
-
-                    <select
+<select id="usuarios-field-9"
                       value={formEdicao.role}
                       onChange={(event) =>
                         setFormEdicao((atual) => ({
                           ...atual,
-                          role: event.target.value as
-                            | "admin"
-                            | "supervisor"
-                            | "rh",
+                          role: event.target.value as Role,
                         }))
                       }
                       className="h-11 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none focus:border-yellow-500 focus:ring-4 focus:ring-yellow-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                     >
-                      <option value="supervisor">Supervisor</option>
+                      <option value="coordenador">Coordenador</option>
+<option value="supervisor">Supervisor</option>
                       <option value="rh">RH</option>
                       <option value="admin">Administrador</option>
                     </select>
                   </div>
 
                   <div>
-                    <label className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
+                    <label htmlFor="usuarios-field-10" className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
                       Status
                     </label>
-
-                    <select
+<select id="usuarios-field-10"
                       value={formEdicao.ativo ? "ativo" : "inativo"}
                       onChange={(event) =>
                         setFormEdicao((atual) => ({
@@ -832,11 +799,10 @@ export default function UsuariosPage() {
 
                   {formEdicao.role === "supervisor" && (
                     <div>
-                      <label className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
+                      <label htmlFor="usuarios-field-11" className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
                         Código do supervisor
                       </label>
-
-                      <input
+<input id="usuarios-field-11"
                         value={formEdicao.codigoSupervisor}
                         onChange={(event) =>
                           setFormEdicao((atual) => ({
@@ -851,11 +817,10 @@ export default function UsuariosPage() {
                   )}
 
                   <div>
-                    <label className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
+                    <label htmlFor="usuarios-field-12" className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
                       Nova senha
                     </label>
-
-                    <input
+<input id="usuarios-field-12"
                       type="password"
                       value={formEdicao.novaSenha}
                       onChange={(event) =>
@@ -870,11 +835,10 @@ export default function UsuariosPage() {
                   </div>
 
                   <div>
-                    <label className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
+                    <label htmlFor="usuarios-field-13" className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
                       Confirmar nova senha
                     </label>
-
-                    <input
+<input id="usuarios-field-13"
                       type="password"
                       value={formEdicao.confirmarNovaSenha}
                       onChange={(event) =>
@@ -896,7 +860,7 @@ export default function UsuariosPage() {
                       setModoEdicao(false);
                       setUsuarioEditando(null);
                     }}
-                    className="rounded-xl border border-slate-200 px-5 py-3 text-sm font-black text-slate-600 transition hover:bg-slate-50 dark:border-slate-800 dark:text-slate-300 dark:hover:bg-slate-800"
+                    className="rounded-xl border border-slate-200 px-5 py-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 dark:border-slate-800 dark:text-slate-300 dark:hover:bg-slate-800"
                   >
                     Cancelar
                   </button>
@@ -904,7 +868,7 @@ export default function UsuariosPage() {
                   <button
                     type="submit"
                     disabled={salvando}
-                    className="rounded-xl bg-yellow-500 px-5 py-3 text-sm font-black text-slate-950 shadow-[0_10px_25px_rgba(234,179,8,0.25)] transition hover:bg-yellow-400 disabled:cursor-not-allowed disabled:opacity-60"
+                    className="rounded-xl bg-yellow-500 px-5 py-3 text-sm font-semibold text-slate-950 shadow-sm transition hover:bg-yellow-400 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {salvando ? "Salvando..." : "Salvar alterações"}
                   </button>
@@ -915,7 +879,7 @@ export default function UsuariosPage() {
             <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
               <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                 <div>
-                  <h2 className="text-lg font-black text-slate-900 dark:text-slate-100">
+                  <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
                     Lista de usuários
                   </h2>
 
@@ -939,26 +903,26 @@ export default function UsuariosPage() {
                 </div>
               </div>
 
-              <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800">
-                <table className="min-w-[860px] w-full border-collapse text-center text-sm">
+              <div className="data-table-wrap overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800">
+                <table className="data-table min-w-[860px] w-full border-collapse text-center text-sm">
                   <thead className="bg-slate-50 dark:bg-slate-800">
                     <tr>
-                      <th className="px-4 py-3 text-center font-black text-slate-600 dark:text-slate-300">
+                      <th className="px-4 py-3 text-center font-semibold text-slate-600 dark:text-slate-300">
                         Nome
                       </th>
-                      <th className="px-4 py-3 text-center font-black text-slate-600 dark:text-slate-300">
+                      <th className="px-4 py-3 text-center font-semibold text-slate-600 dark:text-slate-300">
                         E-mail
                       </th>
-                      <th className="px-4 py-3 text-center font-black text-slate-600 dark:text-slate-300">
+                      <th className="px-4 py-3 text-center font-semibold text-slate-600 dark:text-slate-300">
                         Perfil
                       </th>
-                      <th className="px-4 py-3 text-center font-black text-slate-600 dark:text-slate-300">
+                      <th className="px-4 py-3 text-center font-semibold text-slate-600 dark:text-slate-300">
                         Status
                       </th>
-                      <th className="px-4 py-3 text-center font-black text-slate-600 dark:text-slate-300">
+                      <th className="px-4 py-3 text-center font-semibold text-slate-600 dark:text-slate-300">
                         Criado em
                       </th>
-                      <th className="px-4 py-3 text-center font-black text-slate-600 dark:text-slate-300">
+                      <th className="px-4 py-3 text-center font-semibold text-slate-600 dark:text-slate-300">
                         Ações
                       </th>
                     </tr>
@@ -970,25 +934,25 @@ export default function UsuariosPage() {
                         key={item.id}
                         className="transition hover:bg-slate-50 dark:hover:bg-slate-800"
                       >
-                        <td className="px-4 py-4 text-center">
+                        <td data-label="Nome" className="px-4 py-4 text-center">
                           <div className="flex items-center justify-center gap-3">
                             <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-yellow-50 text-yellow-600 dark:bg-yellow-950 dark:text-yellow-300">
                               <ShieldCheck size={20} />
                             </div>
 
-                            <p className="font-black text-slate-900 dark:text-slate-100">
+                            <p className="font-semibold text-slate-900 dark:text-slate-100">
                               {item.nome}
                             </p>
                           </div>
                         </td>
 
-                        <td className="px-4 py-4 text-center text-slate-600 dark:text-slate-300">
+                        <td data-label="E-mail" className="px-4 py-4 text-center text-slate-600 dark:text-slate-300">
                           {item.email}
                         </td>
 
-                        <td className="px-4 py-4 text-center">
+                        <td data-label="Perfil" className="px-4 py-4 text-center">
                           <span
-                            className={`rounded-full px-3 py-1 text-xs font-black ${classePerfil(
+                            className={`rounded-full px-3 py-1 text-xs font-semibold ${classePerfil(
                               item.role
                             )}`}
                           >
@@ -996,9 +960,9 @@ export default function UsuariosPage() {
                           </span>
                         </td>
 
-                        <td className="px-4 py-4 text-center">
+                        <td data-label="Status" className="px-4 py-4 text-center">
                           <span
-                            className={`rounded-full px-3 py-1 text-xs font-black ${
+                            className={`rounded-full px-3 py-1 text-xs font-semibold ${
                               item.ativo
                                 ? "bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-200"
                                 : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"
@@ -1008,18 +972,18 @@ export default function UsuariosPage() {
                           </span>
                         </td>
 
-                        <td className="px-4 py-4 text-center text-slate-600 dark:text-slate-300">
+                        <td data-label="Criado em" className="px-4 py-4 text-center text-slate-600 dark:text-slate-300">
                           {new Date(item.created_at).toLocaleDateString(
                             "pt-BR"
                           )}
                         </td>
 
-                        <td className="px-4 py-4 text-center">
+                        <td data-label="Ações" className="px-4 py-4 text-center">
                           <div className="flex items-center justify-center gap-2">
                             <button
                               type="button"
                               onClick={() => abrirEdicaoUsuario(item)}
-                              className="rounded-xl bg-slate-100 px-3 py-2 text-xs font-black text-slate-700 transition hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
+                              className="rounded-xl bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
                             >
                               Editar
                             </button>
@@ -1027,7 +991,7 @@ export default function UsuariosPage() {
                             <button
                               type="button"
                               onClick={() => alternarStatusUsuario(item)}
-                              className={`rounded-xl px-3 py-2 text-xs font-black transition ${
+                              className={`rounded-xl px-3 py-2 text-xs font-semibold transition ${
                                 item.ativo
                                   ? "bg-red-50 text-red-700 hover:bg-red-100 dark:bg-red-950 dark:text-red-200 dark:hover:bg-red-900"
                                   : "bg-green-50 text-green-700 hover:bg-green-100 dark:bg-green-950 dark:text-green-200 dark:hover:bg-green-900"
@@ -1055,8 +1019,6 @@ export default function UsuariosPage() {
               </div>
             </section>
           )}
-        </section>
-      </div>
-    </main>
+        </AppShell>
   );
 }

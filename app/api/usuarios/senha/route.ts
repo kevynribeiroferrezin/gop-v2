@@ -1,99 +1,15 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { authenticate } from "../../../../src/lib/supabase/server";
+import { RequestError, readJsonObject, passwordInput } from "../../../../src/lib/api-security";
 import { validarSenhaForte } from "../../../../src/lib/password";
-
-type Body = {
-  userId: string;
-  novaSenha: string;
-};
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-if (!supabaseUrl) {
-  throw new Error("NEXT_PUBLIC_SUPABASE_URL não encontrada");
-}
-
-if (!serviceRoleKey) {
-  throw new Error("SUPABASE_SERVICE_ROLE_KEY não encontrada");
-}
-
-const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey, {
-  db: {
-    schema: "gop_v2",
-  },
-  auth: {
-    autoRefreshToken: false,
-    persistSession: false,
-  },
-});
 
 const INTERNAL_ERROR_MESSAGE =
   "Nao foi possivel concluir a solicitacao. Tente novamente em instantes.";
 
 export async function PATCH(request: Request) {
   try {
-    const authorization = request.headers.get("authorization");
-
-    if (!authorization) {
-      return NextResponse.json(
-        { error: "Token de autenticação não informado." },
-        { status: 401 }
-      );
-    }
-
-    const token = authorization.replace("Bearer ", "");
-
-    const {
-      data: { user },
-      error: userError,
-    } = await supabaseAdmin.auth.getUser(token);
-
-    if (userError || !user) {
-      return NextResponse.json(
-        { error: "Usuário não autenticado." },
-        { status: 401 }
-      );
-    }
-
-    const { data: profileAdmin, error: profileError } = await supabaseAdmin
-      .from("profiles")
-      .select("id, role, ativo")
-      .eq("user_id", user.id)
-      .single();
-
-    if (profileError || !profileAdmin) {
-      return NextResponse.json(
-        { error: "Perfil do usuário não encontrado." },
-        { status: 403 }
-      );
-    }
-
-    if (profileAdmin.role !== "admin" || profileAdmin.ativo !== true) {
-      return NextResponse.json(
-        { error: "Apenas administradores podem redefinir senha." },
-        { status: 403 }
-      );
-    }
-
-    const body = (await request.json()) as Body;
-
-    const userId = body.userId;
-    const novaSenha = body.novaSenha;
-
-    if (!userId) {
-      return NextResponse.json(
-        { error: "ID do usuário não informado." },
-        { status: 400 }
-      );
-    }
-
-    if (!novaSenha) {
-      return NextResponse.json(
-        { error: "Nova senha obrigatoria." },
-        { status: 400 }
-      );
-    }
+    const { user, profile: profileAdmin, supabaseAdmin } = await authenticate(request);
+    const { userId, novaSenha } = passwordInput(await readJsonObject(request));
 
     const senhaValidada = validarSenhaForte(novaSenha);
 
@@ -102,6 +18,13 @@ export async function PATCH(request: Request) {
         { error: senhaValidada.message },
         { status: 400 }
       );
+    }
+
+    // A service role pode operar no Auth inteiro. Restringir ao cadastro GOP.
+    const { data: target, error: targetError } = await supabaseAdmin
+      .from("profiles").select("id").eq("user_id", userId).single();
+    if (targetError || !target) {
+      return NextResponse.json({ error: "Usuario indisponivel." }, { status: 404 });
     }
 
     const { error: updateError } = await supabaseAdmin.auth.admin.updateUserById(
@@ -132,7 +55,10 @@ export async function PATCH(request: Request) {
       success: true,
       message: "Senha redefinida com sucesso.",
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof RequestError) {
+      return NextResponse.json({ error: error.message }, { status: error.status });
+    }
     return NextResponse.json(
       { error: INTERNAL_ERROR_MESSAGE },
       { status: 500 }

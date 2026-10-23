@@ -1,755 +1,189 @@
 "use client";
-import Sidebar from "../../src/components/Sidebar";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import AppShell, { PageLoading } from "../../src/components/AppShell";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  ArrowLeft,
-  CheckCircle2,
-  Loader2,
-  Save,
-  UserCheck,
-} from "lucide-react";
+import { CheckCircle2, Loader2, LockKeyhole, Save, Search } from "lucide-react";
 import { supabase } from "../../src/lib/supabase/client";
-import { GENERIC_DATA_ERROR, GENERIC_SAVE_ERROR } from "../../src/lib/errors";
-import { dataHojeBrasil, gerarDatasPeriodo } from "../../src/lib/dates";
-import { registrarAuditoria } from "../../src/lib/audit";
+import { dataHojeBrasil } from "../../src/lib/dates";
+import { activeProfile, supervisorList } from "../../src/lib/workspace-data";
+import { collectPages } from "../../src/lib/reports";
+import { missingSchema } from "../../src/lib/schema-errors";
+import { STATUS_LABELS } from "../../src/lib/workspace-types";
+import { detailError, emptyDetails, normalizeDetails, type AttendanceDetails, type AttendanceStatus } from "../../src/lib/attendance";
+import AttendanceDetailsFields from "../../src/components/AttendanceDetailsFields";
+import { StatusBadge } from "../../src/components/AttendanceTable";
 
-type ChamadaItem = {
-  funcionario_id: string;
-  matricula: string;
-  funcionario_nome: string;
-  cargo_nome: string;
-  supervisor_id: string;
-  supervisor_codigo: string;
-  supervisor_nome: string;
-  supervisor_email: string;
-  data_presenca: string;
-  presenca_id: string | null;
-  status_presenca: StatusPresenca;
-  hora_entrada: string | null;
-  hora_saida: string | null;
-  observacao: string | null;
-  regional_id: number | null;
-  regional_codigo: string | null;
-  regional_nome: string | null;
-  possui_registro_manual: boolean;
-  origem_status: string;
-};
-
-type StatusPresenca =
-  | "presente"
-  | "falta"
-  | "atraso"
-  | "atestado"
-  | "folga"
-  | "ferias"
-  | "afastado";
-
-const statusOptions: {
-  value: StatusPresenca;
-  label: string;
-  className: string;
-}[] = [
-  {
-    value: "presente",
-    label: "Presente",
-    className: "bg-green-50 text-green-700 border-green-200",
-  },
-  {
-    value: "falta",
-    label: "Falta",
-    className: "bg-red-50 text-red-700 border-red-200",
-  },
-  {
-    value: "atraso",
-    label: "Atraso",
-    className: "bg-orange-50 text-orange-700 border-orange-200",
-  },
-  {
-    value: "atestado",
-    label: "Atestado",
-    className:
-      "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-200",
-  },
-  {
-    value: "folga",
-    label: "Folga",
-    className: "bg-yellow-50 text-yellow-700 border-yellow-200",
-  },
-  {
-    value: "ferias",
-    label: "Férias",
-    className: "bg-amber-50 text-amber-700 border-amber-200",
-  },
-  {
-    value: "afastado",
-    label: "Afastado",
-    className: "bg-slate-100 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-800",
-  },
-];
-
+type Item = { funcionario_id: string; matricula: string; funcionario_nome: string; cargo_nome: string;
+  supervisor_id: string; supervisor_codigo: string; supervisor_nome: string; data_presenca: string;
+  status_presenca: AttendanceStatus; observacao: string | null; possui_registro_manual: boolean };
+type Draft = AttendanceDetails & { status: AttendanceStatus; observacao: string };
+type Stored = AttendanceDetails & { funcionario_id: string; supervisor_id: string; status: AttendanceStatus; observacao: string | null };
+type CallState = { versao: number; registros: Stored[]; fechamentos: string[] };
+type VacationPeriod = { versao: number; inicio: string; fim: string; token: string; dias_bloqueados: number };
+type VacationForm = { employee: Item; start: string; end: string; original?: VacationPeriod; reference: string };
+const statuses = Object.keys(STATUS_LABELS) as AttendanceStatus[];
+function savedDraft(row: Item, stored?: Stored): Draft {
+  return { ...emptyDetails, ...stored, status: stored?.status ?? row.status_presenca ?? "presente", observacao: stored?.observacao ?? row.observacao ?? "" };
+}
+function saveError(error: { code?: string; message?: string }) {
+  if (missingSchema(error)) return "As novas regras precisam ser habilitadas no banco. Solicite a aplicação da migração 007 à administração.";
+  if (error.code === "55000") return "Registro bloqueado: as férias já foram gravadas ou a chamada foi finalizada. Atualize a tela para consultar os dados atuais.";
+  if (error.code === "42501") return "Sem permissão para alterar esta equipe. Atualize a tela para conferir seu vínculo.";
+  return "Não foi possível salvar. Confira os detalhes obrigatórios e tente novamente.";
+}
 export default function ChamadaPage() {
   const router = useRouter();
-  const [dataSelecionada, setDataSelecionada] = useState(dataHojeBrasil());
-  const [dados, setDados] = useState<ChamadaItem[]>([]);
-  const [statusPorFuncionario, setStatusPorFuncionario] = useState<
-    Record<string, StatusPresenca>
-  >({});
-  const [observacaoPorFuncionario, setObservacaoPorFuncionario] = useState<
-    Record<string, string>
-  >({});
-  const [modalFerias, setModalFerias] = useState<{
-  aberto: boolean;
-  colaborador: ChamadaItem | null;
-  dataInicio: string;
-  dataFim: string;
-}>({
-  aberto: false,
-  colaborador: null,
-  dataInicio: dataHojeBrasil(),
-  dataFim: dataHojeBrasil(),
-});
-  const [supervisorSelecionado, setSupervisorSelecionado] = useState("");
-  const [carregando, setCarregando] = useState(true);
-  const [salvando, setSalvando] = useState(false);
-  const [finalizando, setFinalizando] = useState(false);
-  const [erro, setErro] = useState<string | null>(null);
-  const [sucesso, setSucesso] = useState<string | null>(null);
-
-  const carregarChamada = useCallback(async () => {
-    setCarregando(true);
-    setErro(null);
-    setSucesso(null);
-
-    const { data, error } = await supabase.rpc("get_chamada_por_data", {
-      p_data: dataSelecionada,
-    });
-
-    if (error) {
-      setErro(GENERIC_DATA_ERROR);
-      setCarregando(false);
-      return;
-    }
-
-    const lista = (data ?? []) as ChamadaItem[];
-
-    setDados(lista);
-
-    const statusInicial: Record<string, StatusPresenca> = {};
-    const observacaoInicial: Record<string, string> = {};
-
-    lista.forEach((item) => {
-      statusInicial[item.funcionario_id] = item.status_presenca ?? "presente";
-      observacaoInicial[item.funcionario_id] = item.observacao ?? "";
-    });
-
-    setStatusPorFuncionario(statusInicial);
-    setObservacaoPorFuncionario(observacaoInicial);
-
-    if (lista.length > 0) {
-      setSupervisorSelecionado(lista[0].supervisor_id);
-    }
-
-    setCarregando(false);
-  }, [dataSelecionada]);
-
+  const [date, setDate] = useState(dataHojeBrasil);
+  const [rows, setRows] = useState<Item[]>([]);
+  const [drafts, setDrafts] = useState<Record<string, Draft>>({});
+  const [original, setOriginal] = useState<Record<string, Draft>>({});
+  const [closed, setClosed] = useState<string[]>([]);
+  const [ready, setReady] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [team, setTeam] = useState("");
+  const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [vacation, setVacation] = useState<VacationForm | null>(null);
+  const requestId = useRef(0);
+  const load = useCallback(async (signal?: AbortSignal) => {
+    const request = ++requestId.current;
+    setLoading(true); setError(""); setSuccess(""); setReady(false); setVacation(null);
+    try {
+      const profile = await activeProfile();
+      if (!profile) { router.replace("/login"); return; }
+      if (!["admin", "supervisor"].includes(profile.role)) { router.replace("/acesso-negado"); return; }
+      const teams = (await supervisorList()).filter((item) => item.ativo);
+      const ids = teams.map((item) => item.id);
+      const records = ids.length ? await collectPages<Item>(async (offset, last) => {
+        const { data, error } = await supabase.rpc("get_chamada_por_data", { p_data: date })
+          .select("funcionario_id,matricula,funcionario_nome,cargo_nome,supervisor_id,supervisor_codigo,supervisor_nome,data_presenca,status_presenca,observacao,possui_registro_manual")
+          .in("supervisor_id", ids).order("supervisor_id").order("funcionario_id").range(offset, last);
+        if (error) throw new Error("Não foi possível carregar a chamada.");
+        return ((data ?? []) as unknown as Item[]).filter((row) => ids.includes(row.supervisor_id));
+      }) : [];
+      const { data: state, error: stateError } = await supabase.rpc("estado_chamada", { p_data: date });
+      if (stateError && !missingSchema(stateError)) throw new Error("Não foi possível conferir as travas da chamada. A edição está bloqueada até essa verificação.");
+      const current = !stateError && state?.versao === 1 ? state as CallState : null;
+      const stored = new Map((current?.registros ?? []).filter((item) => ids.includes(item.supervisor_id)).map((item) => [item.funcionario_id, item]));
+      const initial = Object.fromEntries(records.map((row) => [row.funcionario_id, savedDraft(row, stored.get(row.funcionario_id))]));
+      if (signal?.aborted || request !== requestId.current) return;
+      setRows(records); setDrafts(initial); setOriginal(initial); setClosed(current?.fechamentos ?? []); setReady(Boolean(current)); setIsAdmin(profile.role === "admin");
+      const requested = new URLSearchParams(window.location.search).get("equipe");
+      setTeam((previous) => records.some((row) => row.supervisor_id === previous) ? previous : requested && records.some((row) => row.supervisor_id === requested) ? requested : records[0]?.supervisor_id ?? "");
+    } catch (error) {
+      if (!signal?.aborted && request === requestId.current) { setRows([]); setError(error instanceof Error ? error.message : "Não foi possível carregar a chamada."); }
+    } finally { if (!signal?.aborted && request === requestId.current) setLoading(false); }
+  }, [date, router]);
   useEffect(() => {
-    async function iniciar() {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!session) {
-        router.push("/login");
-        return;
-      }
-
-      await carregarChamada();
+    const controller = new AbortController(); queueMicrotask(() => { if (!controller.signal.aborted) void load(controller.signal); });
+    return () => controller.abort();
+  }, [load]);
+  const teams = useMemo(() => [...new Map(rows.map((row) => [row.supervisor_id, { id: row.supervisor_id, name: row.supervisor_nome }])).values()], [rows]);
+  const teamRows = useMemo(() => rows.filter((row) => row.supervisor_id === team), [rows, team]);
+  const visible = useMemo(() => teamRows.filter((row) => `${row.funcionario_nome} ${row.matricula} ${row.cargo_nome}`.toLocaleLowerCase("pt-BR").includes(search.trim().toLocaleLowerCase("pt-BR"))), [teamRows, search]);
+  const finished = closed.includes(team);
+  const disabled = saving || !ready || finished;
+  const vacationLocked = (row: Item) => !isAdmin && original[row.funcionario_id]?.status === "ferias";
+  const exceptions = teamRows.filter((row) => drafts[row.funcionario_id]?.status !== "presente").length;
+  const changed = (row: Item) => JSON.stringify(drafts[row.funcionario_id]) !== JSON.stringify(original[row.funcionario_id]);
+  const dirty = teamRows.some((row) => !vacationLocked(row) && changed(row));
+  function update(row: Item, next: Partial<Draft>) {
+    if (disabled || vacationLocked(row)) return;
+    setDrafts((current) => ({ ...current, [row.funcionario_id]: { ...current[row.funcionario_id], ...next } }));
+  }
+  async function openVacation(row: Item) {
+    if (disabled || vacationLocked(row)) return;
+    if (original[row.funcionario_id]?.status !== "ferias") {
+      setVacation({ employee: row, start: date, end: date, reference: date }); return;
     }
-
-    iniciar();
-  }, [carregarChamada, router]);
-
-  const supervisores = useMemo(() => {
-    const mapa = new Map<
-      string,
-      {
-        id: string;
-        nome: string;
-        codigo: string;
-      }
-    >();
-
-    dados.forEach((item) => {
-      if (item.supervisor_id) {
-        mapa.set(item.supervisor_id, {
-          id: item.supervisor_id,
-          nome: item.supervisor_nome,
-          codigo: item.supervisor_codigo,
-        });
-      }
+    if (!isAdmin) return;
+    setSaving(true); setError(""); setSuccess("");
+    try {
+      const { data, error } = await supabase.rpc("consultar_periodo_ferias", { p_funcionario_id: row.funcionario_id, p_referencia: date });
+      if (error) { setError(missingSchema(error) ? "O ajuste de períodos ainda não foi habilitado no banco. Aplique a migração 009 para liberar essa ação ao admin." : "Não foi possível consultar o período. Confirme seu acesso de admin e atualize a chamada."); return; }
+      if (!data || data.versao !== 1) { setError("O período de férias não foi encontrado. Atualize a chamada antes de editar."); return; }
+      const period = data as VacationPeriod;
+      setVacation({ employee: row, start: period.inicio, end: period.fim, original: period, reference: date });
+    } catch { setError("Não foi possível consultar o período de férias. Tente novamente."); }
+    finally { setSaving(false); }
+  }
+  async function save(finish = false) {
+    if (disabled || !teamRows.length) return;
+    const candidates = teamRows.filter((row) => !vacationLocked(row) && (finish || changed(row)));
+    for (const row of candidates) {
+      const draft = drafts[row.funcionario_id];
+      const reason = detailError(draft.status, draft);
+      if (reason) { setError(`${row.funcionario_nome}: ${reason}`); return; }
+    }
+    const records = candidates.filter(changed).map((row) => {
+      const draft = drafts[row.funcionario_id];
+      return { funcionario_id: row.funcionario_id, status: draft.status, observacao: draft.observacao.trim() || null, ...normalizeDetails(draft.status, draft) };
     });
-
-    return Array.from(mapa.values());
-  }, [dados]);
-
-  const funcionariosFiltrados = useMemo(() => {
-    return dados.filter((item) => item.supervisor_id === supervisorSelecionado);
-  }, [dados, supervisorSelecionado]);
-
-  const resumo = useMemo(() => {
-    const total = funcionariosFiltrados.length;
-
-    const excecoes = funcionariosFiltrados.filter((item) => {
-      const status = statusPorFuncionario[item.funcionario_id];
-      return status && status !== "presente";
-    }).length;
-
-    const presentes = total - excecoes;
-
-    return {
-      total,
-      presentes,
-      excecoes,
-    };
-  }, [funcionariosFiltrados, statusPorFuncionario]);
-
-function abrirModalFerias(colaborador: ChamadaItem) {
-  setModalFerias({
-    aberto: true,
-    colaborador,
-    dataInicio: dataSelecionada,
-    dataFim: dataSelecionada,
-  });
-}
-
-async function confirmarFerias() {
-  if (!modalFerias.colaborador) {
-    return;
+    if (!finish && !records.length) { setSuccess("Nenhuma alteração pendente para salvar."); return; }
+    if (!window.confirm(finish ? "Finalizar esta chamada? As alterações serão salvas e a chamada não poderá ser reaberta ou alterada." : `Salvar ${records.length} registro(s) da chamada?`)) return;
+    setSaving(true); setError(""); setSuccess("");
+    try {
+      const { error } = await supabase.rpc("salvar_chamada", { p_supervisor_id: team, p_data: date, p_registros: records, p_finalizar: finish });
+      if (error) { setError(saveError(error)); return; }
+      await load(); setSuccess(finish ? "Chamada finalizada. Todos os registros estão bloqueados para alteração." : "Alterações salvas com sucesso.");
+    } catch { setError("Não foi possível salvar. Atualize a chamada e confira os registros antes de tentar novamente."); }
+    finally { setSaving(false); }
   }
-
-  if (!modalFerias.dataInicio || !modalFerias.dataFim) {
-    setErro("Informe o período de férias.");
-    return;
-  }
-
-  if (modalFerias.dataInicio > modalFerias.dataFim) {
-    setErro("A data inicial não pode ser maior que a data final.");
-    return;
-  }
-
-  const confirmar = window.confirm(
-    `Deseja lançar férias para ${modalFerias.colaborador.funcionario_nome} no período selecionado?`
-  );
-
-  if (!confirmar) {
-    return;
-  }
-
-  setErro(null);
-  setSucesso(null);
-  setSalvando(true);
-
-  const datas = gerarDatasPeriodo(modalFerias.dataInicio, modalFerias.dataFim);
-
-  // Férias são gravadas dia a dia para manter a chamada consultável por data.
-  const registros = datas.map((data) => ({
-    funcionario_id: modalFerias.colaborador!.funcionario_id,
-    supervisor_id: modalFerias.colaborador!.supervisor_id,
-    data_presenca: data,
-    status: "ferias",
-    observacao: `Férias de ${new Date(
-      modalFerias.dataInicio + "T00:00:00"
-    ).toLocaleDateString("pt-BR")} até ${new Date(
-      modalFerias.dataFim + "T00:00:00"
-    ).toLocaleDateString("pt-BR")}`,
-  }));
-
-  const { error } = await supabase.from("presencas").upsert(registros, {
-    onConflict: "funcionario_id,data_presenca",
-  });
-
-  if (error) {
-    setErro(GENERIC_SAVE_ERROR);
-    setSalvando(false);
-    return;
-  }
-
-  await registrarAuditoria({
-    entidade: "presencas",
-    entidadeId: modalFerias.colaborador.funcionario_id,
-    acao: "lancar_ferias",
-    detalhes: {
-      data_inicio: modalFerias.dataInicio,
-      data_fim: modalFerias.dataFim,
-      total_dias: datas.length,
-      supervisor_id: modalFerias.colaborador.supervisor_id,
-    },
-  });
-
-  setModalFerias({
-    aberto: false,
-    colaborador: null,
-    dataInicio: dataHojeBrasil(),
-    dataFim: dataHojeBrasil(),
-  });
-
-  setSucesso("Férias lançadas com sucesso para o período selecionado.");
-  setSalvando(false);
-
-  await carregarChamada();
-}
-  async function salvarAlteracoes() {
-    setSalvando(true);
-    setErro(null);
-    setSucesso(null);
-
-    const registros = funcionariosFiltrados
-      .filter((item) => {
-        const statusAtual = statusPorFuncionario[item.funcionario_id];
-        const observacaoAtual = observacaoPorFuncionario[item.funcionario_id];
-
-        return (
-          statusAtual !== "presente" ||
-          item.possui_registro_manual ||
-          Boolean(observacaoAtual?.trim())
-        );
-      })
-      .map((item) => ({
-        funcionario_id: item.funcionario_id,
-        supervisor_id: item.supervisor_id,
-        data_presenca: item.data_presenca,
-        status: statusPorFuncionario[item.funcionario_id] ?? "presente",
-        observacao: observacaoPorFuncionario[item.funcionario_id] || null,
-      }));
-
-    if (registros.length === 0) {
-      setSucesso("Nenhuma exceção para salvar. Todos permanecem como presentes.");
-      setSalvando(false);
-      return;
-    }
-
-    const confirmar = window.confirm(
-      `Deseja salvar ${registros.length} registro(s) de chamada para esta data?`
-    );
-
-    if (!confirmar) {
-      setSalvando(false);
-      return;
-    }
-
-    const { error } = await supabase.from("presencas").upsert(registros, {
-      onConflict: "funcionario_id,data_presenca",
-    });
-
-    if (error) {
-      setErro(GENERIC_SAVE_ERROR);
-      setSalvando(false);
-      return;
-    }
-
-    await registrarAuditoria({
-      entidade: "presencas",
-      acao: "salvar_chamada",
-      detalhes: {
-        data_presenca: dataSelecionada,
-        supervisor_id: supervisorSelecionado,
-        total_registros: registros.length,
-        statuses: registros.reduce((totais, item) => {
-          totais[item.status] = (totais[item.status] ?? 0) + 1;
-          return totais;
-        }, {} as Record<string, number>),
-      },
-    });
-
-    setSucesso("Alterações salvas com sucesso.");
-    setSalvando(false);
-
-    await carregarChamada();
-  }
-
-  async function finalizarChamada() {
-    const confirmar = window.confirm(
-      `Deseja finalizar a chamada de ${new Date(
-        dataSelecionada + "T00:00:00"
-      ).toLocaleDateString("pt-BR")}?`
-    );
-
-    if (!confirmar) {
-      return;
-    }
-
-    setFinalizando(true);
-    setErro(null);
-    setSucesso(null);
-
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-
-    if (!session) {
-      router.push("/login");
-      return;
-    }
-
-    const { data: profile, error: profileError } = await supabase
-      .from("profiles")
-      .select("id")
-      .eq("user_id", session.user.id)
-      .single();
-
-    if (profileError) {
-      setErro(profileError.message);
-      setFinalizando(false);
-      return;
-    }
-
-    const { error } = await supabase.from("fechamentos_chamada").upsert(
-      {
-        supervisor_id: supervisorSelecionado,
-        data_chamada: dataSelecionada,
-        total_funcionarios: resumo.total,
-        total_excecoes: resumo.excecoes,
-        observacao: "Chamada finalizada pelo sistema.",
-        fechado_por: profile.id,
-      },
-      {
-        onConflict: "supervisor_id,data_chamada",
+  async function saveVacation() {
+    if (!vacation || disabled || vacationLocked(vacation.employee)) return;
+    const { employee, start, end, original: period, reference } = vacation;
+    if (period && !isAdmin) return;
+    if (!start || !end || end < start || (Date.parse(end) - Date.parse(start)) / 86400000 > 365) { setError("Selecione um período válido de até 366 dias."); return; }
+    if (dirty && !window.confirm("Há alterações ainda não salvas. Para registrar o período de férias, a chamada será recarregada e esses rascunhos serão descartados. Continuar?")) return;
+    if (period && start === period.inicio && end === period.fim) { setError("Altere a data inicial ou final para salvar o ajuste do período."); return; }
+    if (!window.confirm(period ? `Substituir o período de férias de ${employee.funcionario_nome}, de ${period.inicio.split("-").reverse().join("/")} a ${period.fim.split("-").reverse().join("/")}, por ${start.split("-").reverse().join("/")} a ${end.split("-").reverse().join("/")}? Os dias retirados deixarão de estar marcados como férias. Dias finalizados não poderão ser removidos.` : `Registrar férias de ${employee.funcionario_nome} de ${start.split("-").reverse().join("/")} até ${end.split("-").reverse().join("/")}? Depois de gravadas, somente admin poderá alterá-las enquanto a chamada estiver aberta.`)) return;
+    setSaving(true); setError(""); setSuccess("");
+    try {
+      const { error } = period
+        ? await supabase.rpc("alterar_periodo_ferias", { p_funcionario_id: employee.funcionario_id, p_referencia: reference, p_token: period.token, p_inicio: start, p_fim: end })
+        : await supabase.rpc("registrar_ferias", { p_funcionario_id: employee.funcionario_id, p_inicio: start, p_fim: end });
+      if (error) {
+        setError(period && missingSchema(error) ? "Aplique a migração 009 no banco para habilitar o ajuste de períodos."
+          : period && error.code === "40001" ? "Esse período foi alterado em outra sessão. Cancele e abra novamente o ajuste antes de salvar."
+          : period && error.code === "23505" ? "O novo período inclui datas com outros registros. Nenhum dia foi alterado; revise essas datas."
+          : period && error.code === "55000" ? "O ajuste alteraria uma chamada finalizada. Mantenha esses dias no período; nenhum registro foi alterado."
+          : saveError(error)); return;
       }
-    );
-
-    if (error) {
-      setErro(GENERIC_SAVE_ERROR);
-      setFinalizando(false);
-      return;
-    }
-
-    await registrarAuditoria({
-      entidade: "fechamentos_chamada",
-      entidadeId: `${supervisorSelecionado}:${dataSelecionada}`,
-      acao: "finalizar_chamada",
-      detalhes: {
-        supervisor_id: supervisorSelecionado,
-        data_chamada: dataSelecionada,
-        total_funcionarios: resumo.total,
-        total_excecoes: resumo.excecoes,
-      },
-    });
-
-    setSucesso("Chamada finalizada com sucesso.");
-    setFinalizando(false);
+      await load(); setSuccess(period ? "Período de férias atualizado. As datas anteriores foram substituídas pelo novo período." : "Férias registradas. Somente admin poderá alterar esses lançamentos enquanto a chamada estiver aberta.");
+    } catch { setError("Não foi possível registrar as férias. Confira o período e tente novamente."); }
+    finally { setSaving(false); }
   }
-
-  if (carregando) {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-[#f6f7fb]">
-        <div className="flex items-center gap-3 rounded-2xl bg-white dark:bg-slate-900 px-8 py-6 text-sm font-semibold text-slate-600 dark:text-slate-300 shadow-sm">
-          <Loader2 className="animate-spin text-yellow-500" size={20} />
-          Carregando chamada...
-        </div>
-      </main>
-    );
-  }
-
-  return (
-    <main className="min-h-screen bg-[#f6f7fb] pb-24 dark:bg-slate-950 lg:pb-0">
-      <div className="flex min-h-screen">
-        <Sidebar active="chamada" />
-
-        <section className="flex-1 p-4 lg:p-8">
-          <header className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <button
-                onClick={() => router.push("/")}
-                className="mb-4 flex items-center gap-2 text-sm font-semibold text-slate-500 dark:text-slate-400 transition hover:text-slate-900 dark:text-slate-100"
-              >
-                <ArrowLeft size={18} />
-                Voltar ao dashboard
-              </button>
-
-              <p className="text-sm font-semibold text-yellow-600">
-                Chamada diária
-              </p>
-              <h1 className="mt-1 text-3xl font-black text-slate-900 dark:text-slate-100">
-                Controle de presença
-              </h1>
-              <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
-                Todos começam como presente. Marque somente as exceções.
-              </p>
-            </div>
-
-            <div className="flex flex-col gap-3 sm:flex-row">
-              <button
-                onClick={salvarAlteracoes}
-                disabled={salvando}
-                className="flex items-center justify-center gap-2 rounded-xl bg-yellow-500 px-5 py-3 text-sm font-black text-slate-950 shadow-[0_10px_25px_rgba(234,179,8,0.25)] transition hover:bg-yellow-400 disabled:opacity-60"
-              >
-                {salvando ? (
-                  <Loader2 className="animate-spin" size={18} />
-                ) : (
-                  <Save size={18} />
-                )}
-                Salvar alterações
-              </button>
-
-              <button
-                onClick={finalizarChamada}
-                disabled={finalizando}
-                className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 py-3 text-sm font-black text-white transition hover:bg-slate-800 disabled:opacity-60"
-              >
-                {finalizando ? (
-                  <Loader2 className="animate-spin" size={18} />
-                ) : (
-                  <CheckCircle2 size={18} />
-                )}
-                Finalizar chamada
-              </button>
-            </div>
-          </header>
-
-          {erro && (
-            <div className="mb-4 rounded-2xl border border-red-100 bg-red-50 p-4 text-sm font-semibold text-red-700">
-              {erro}
-            </div>
-          )}
-
-          {sucesso && (
-            <div className="mb-4 rounded-2xl border border-green-100 bg-green-50 p-4 text-sm font-semibold text-green-700">
-              {sucesso}
-            </div>
-          )}
-
-          <section className="mb-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-              <p className="text-sm font-semibold text-slate-500 dark:text-slate-400">Total</p>
-              <p className="mt-2 text-3xl font-black text-slate-900 dark:text-slate-100">
-                {resumo.total}
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-              <p className="text-sm font-semibold text-slate-500 dark:text-slate-400">Presentes</p>
-              <p className="mt-2 text-3xl font-black text-green-600">
-                {resumo.presentes}
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-              <p className="text-sm font-semibold text-slate-500 dark:text-slate-400">Exceções</p>
-              <p className="mt-2 text-3xl font-black text-yellow-600">
-                {resumo.excecoes}
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-              <p className="text-sm font-semibold text-slate-500 dark:text-slate-400">
-                Data da chamada
-              </p>
-              <input
-                type="date"
-                value={dataSelecionada}
-                onChange={(event) => setDataSelecionada(event.target.value)}
-                className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-black text-slate-900 outline-none focus:border-yellow-500 focus:ring-4 focus:ring-yellow-100 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100"
-              />
-            </div>
-          </section>
-
-          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-            <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-              <div>
-                <h2 className="text-lg font-black text-slate-900 dark:text-slate-100">
-                  Lista de colaboradores
-                </h2>
-                <p className="text-sm text-slate-500 dark:text-slate-400">
-                  Altere apenas quem não estiver presente.
-                </p>
-              </div>
-
-              <select
-                value={supervisorSelecionado}
-                onChange={(event) => setSupervisorSelecionado(event.target.value)}
-                className="h-11 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-4 text-sm font-semibold text-slate-700 dark:text-slate-200 outline-none focus:border-yellow-500 focus:ring-4 focus:ring-yellow-100"
-              >
-                {supervisores.map((supervisor) => (
-                  <option key={supervisor.id} value={supervisor.id}>
-                    {supervisor.nome} - {supervisor.codigo}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="space-y-3">
-              {funcionariosFiltrados.map((item) => {
-                const statusAtual =
-                  statusPorFuncionario[item.funcionario_id] ?? "presente";
-
-                return (
-                  <div
-                    key={item.funcionario_id}
-                    className="rounded-2xl border border-slate-200 p-4 transition hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800"
-                  >
-                    <div className="grid gap-4 lg:grid-cols-[1fr_420px] lg:items-center">
-                      <div>
-                        <div className="flex items-center gap-3">
-                          <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-yellow-50 text-yellow-600">
-                            <UserCheck size={22} />
-                          </div>
-
-                          <div>
-                            <p className="font-black text-slate-900 dark:text-slate-100">
-                              {item.funcionario_nome}
-                            </p>
-
-                            <p className="text-sm text-slate-500 dark:text-slate-400">
-                              Matrícula {item.matricula} • {item.cargo_nome}
-                              {item.regional_nome
-                                ? ` • ${item.regional_nome}`
-                                : ""}
-                            </p>
-                          </div>
-                        </div>
-
-                        <input
-                          value={
-                            observacaoPorFuncionario[item.funcionario_id] ?? ""
-                          }
-                          onChange={(event) =>
-                            setObservacaoPorFuncionario((atual) => ({
-                              ...atual,
-                              [item.funcionario_id]: event.target.value,
-                            }))
-                          }
-                          placeholder="Observação opcional"
-                          className="mt-3 h-11 w-full rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-4 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 outline-none focus:border-yellow-500 focus:ring-4 focus:ring-yellow-100"
-                        />
-                      </div>
-
-                      <div className="flex flex-wrap gap-2">
-                        {statusOptions.map((status) => {
-                          const ativo = statusAtual === status.value;
-
-                          return (
-                            <button
-                              key={status.value}
-                              type="button"
-                              onClick={() => {
-                                if (status.value === "ferias") {
-                                  abrirModalFerias(item);
-                                  return;
-                                }
-
-                                setModalFerias({
-                                  aberto: false,
-                                  colaborador: null,
-                                  dataInicio: dataHojeBrasil(),
-                                  dataFim: dataHojeBrasil(),
-                                });
-
-                                setStatusPorFuncionario((atual) => ({
-                                  ...atual,
-                                  [item.funcionario_id]: status.value,
-                                }));
-                              }}
-                              className={`rounded-xl border px-3 py-2 text-xs font-black transition ${
-                                ativo
-                                  ? status.className
-                                  : "border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-500 dark:text-slate-400 hover:bg-slate-50"
-                              }`}
-                            >
-                              {status.label}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    {modalFerias.aberto &&
-                      modalFerias.colaborador?.funcionario_id ===
-                        item.funcionario_id && (
-                        <div className="mt-4 rounded-2xl border border-yellow-200 bg-yellow-50 p-4">
-                          <div className="mb-4">
-                            <p className="text-sm font-black text-slate-900 dark:text-slate-100">
-                              Lançar férias para {item.funcionario_nome}
-                            </p>
-
-                            <p className="mt-1 text-xs font-semibold text-yellow-700">
-                              Selecione o período. O sistema vai registrar
-                              férias em todos os dias escolhidos.
-                            </p>
-                          </div>
-
-                          <div className="grid gap-4 md:grid-cols-2">
-                            <div>
-                              <label className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
-                                Data inicial
-                              </label>
-
-                              <input
-                                type="date"
-                                value={modalFerias.dataInicio}
-                                onChange={(event) =>
-                                  setModalFerias((atual) => ({
-                                    ...atual,
-                                    dataInicio: event.target.value,
-                                  }))
-                                }
-                                className="h-11 w-full rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-4 text-sm text-slate-900 dark:text-slate-100 outline-none focus:border-yellow-500 focus:ring-4 focus:ring-yellow-100"
-                              />
-                            </div>
-
-                            <div>
-                              <label className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
-                                Data final
-                              </label>
-
-                              <input
-                                type="date"
-                                value={modalFerias.dataFim}
-                                onChange={(event) =>
-                                  setModalFerias((atual) => ({
-                                    ...atual,
-                                    dataFim: event.target.value,
-                                  }))
-                                }
-                                className="h-11 w-full rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-4 text-sm text-slate-900 dark:text-slate-100 outline-none focus:border-yellow-500 focus:ring-4 focus:ring-yellow-100"
-                              />
-                            </div>
-                          </div>
-
-                          <div className="mt-4 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setModalFerias({
-                                  aberto: false,
-                                  colaborador: null,
-                                  dataInicio: dataHojeBrasil(),
-                                  dataFim: dataHojeBrasil(),
-                                })
-                              }
-                              className="rounded-xl border border-yellow-300 bg-white dark:bg-slate-900 px-5 py-3 text-sm font-black text-slate-600 dark:text-slate-300 transition hover:bg-yellow-100"
-                            >
-                              Cancelar
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={confirmarFerias}
-                              disabled={salvando}
-                              className="rounded-xl bg-yellow-500 px-5 py-3 text-sm font-black text-slate-950 transition hover:bg-yellow-400 disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                              {salvando ? "Salvando..." : "Confirmar férias"}
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-        </section>
-      </div>
-    </main>
-  );
+  if (loading) return <PageLoading active="chamada" message="Conferindo registros e fechamento da chamada…" />;
+  return <AppShell active="chamada">
+    <header className="page-heading"><div><p className="eyebrow">Chamada diária</p><h1>Controle de presença</h1><p className="page-description">Marque as exceções e informe os detalhes de cada ocorrência.</p></div><div className="call-actions"><button className="button-primary" disabled={disabled || !teamRows.length} onClick={() => { void save(); }}>{saving ? <Loader2 size={17} className="animate-spin" /> : <Save size={17} />}Salvar alterações</button><button className="button-secondary" disabled={disabled || !teamRows.length || date > dataHojeBrasil()} onClick={() => { void save(true); }}><CheckCircle2 size={17} />{finished ? "Chamada finalizada" : "Finalizar chamada"}</button></div></header>
+    {error && <div className="auth-message error" role="alert">{error}<button type="button" className="button-secondary" disabled={saving} onClick={() => { void load(); }}>Atualizar chamada</button></div>}
+    {success && <p className="auth-message success" role="status">{success}</p>}
+    {!ready && !error && <p className="auth-message" role="status">A consulta está disponível. Para editar e ativar as travas definitivas, a administração precisa aplicar a migração 007 de ocorrências e fechamento no banco.</p>}
+    {finished && <p className="call-lock-notice" role="status"><LockKeyhole size={19} />Chamada finalizada. Nenhum registro desta equipe e data pode ser alterado, inclusive pelo admin.</p>}
+    <section className="surface call-toolbar"><div><span>Total</span><strong>{teamRows.length}</strong></div><div><span>Presentes</span><strong>{teamRows.length - exceptions}</strong></div><div><span>Exceções</span><strong>{exceptions}</strong></div><label>Data da chamada<input aria-label="Data da chamada" type="date" value={date} disabled={saving} onChange={(event) => { if (event.target.value && (!dirty || window.confirm("Descartar as alterações ainda não salvas e mudar a data?"))) setDate(event.target.value); }} /></label></section>
+    <section className="surface call-list"><div className="panel-heading"><div><h2>Lista de colaboradores</h2><p>Somente admin altera férias já gravadas. Chamadas finalizadas ficam bloqueadas para todos.</p></div><select aria-label="Equipe do supervisor" disabled={saving} value={team} onChange={(event) => { if (!dirty || window.confirm("Descartar os rascunhos desta equipe?")) { setDrafts(original); setVacation(null); setTeam(event.target.value); setError(""); setSuccess(""); } }}><option value="" disabled>Selecione uma equipe</option>{teams.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
+      <div className="call-search attendance-search"><Search size={16} /><input aria-label="Buscar colaborador na chamada" placeholder="Buscar nome, matrícula ou cargo…" value={search} onChange={(event) => setSearch(event.target.value)} /></div>
+      {!visible.length && <div className="empty-state"><Search size={25} /><strong>{search ? "Nenhum colaborador encontrado." : "Nenhum colaborador nesta chamada."}</strong></div>}
+      <div className="call-rows">{visible.map((row) => {
+        const draft = drafts[row.funcionario_id]; const locked = vacationLocked(row); const rowDisabled = disabled || locked;
+        return <article className="attendance-row call-employee" key={row.funcionario_id} aria-label={`Chamada de ${row.funcionario_nome}`}>
+          <div className="call-employee-heading"><div><h3>{row.funcionario_nome}</h3><p>{row.matricula} · {row.cargo_nome}</p></div><StatusBadge status={draft.status} /></div>
+          {locked && <p className="call-lock-notice"><LockKeyhole size={16} />Férias já registradas: somente admin pode alterar este lançamento em uma chamada aberta.</p>}
+          {isAdmin && original[row.funcionario_id]?.status === "ferias" && <button type="button" className="button-secondary" disabled={disabled} onClick={() => { void openVacation(row); }}>Alterar período de férias</button>}
+          <div className="call-status-options" role="group" aria-label={`Status de ${row.funcionario_nome}`}>{statuses.map((status) => <button type="button" key={status} className="attendance-status" aria-pressed={draft.status === status} disabled={rowDisabled} onClick={() => {
+            if (status === "ferias") { void openVacation(row); return; }
+            setVacation(null); update(row, { ...normalizeDetails(status, draft), status });
+          }}>{STATUS_LABELS[status]}</button>)}</div>
+          <AttendanceDetailsFields status={draft.status} value={draft} disabled={rowDisabled} onChange={(details) => update(row, details)} />
+          <label className="call-observation">Observação (opcional)<input aria-label={`Observação de ${row.funcionario_nome}`} maxLength={2000} disabled={rowDisabled} value={draft.observacao} onChange={(event) => update(row, { observacao: event.target.value })} /></label>
+          {vacation?.employee.funcionario_id === row.funcionario_id && <fieldset className="occurrence-fields" disabled={rowDisabled}><legend>{vacation.original ? "Alterar período de férias" : "Período de férias"}</legend>
+            {vacation.original ? <p>Período contínuo encontrado: <strong>{vacation.original.inicio.split("-").reverse().join("/")} a {vacation.original.fim.split("-").reverse().join("/")}</strong>. Ao salvar, os dias retirados deixarão de ser férias. {vacation.original.dias_bloqueados > 0 ? `${vacation.original.dias_bloqueados} dia(s) têm chamada finalizada e precisam permanecer no período.` : "Os registros que permanecerem nas mesmas datas serão preservados."}</p> : <p>Todos os dias do período serão registrados. Um período que inclua chamada finalizada será recusado por completo.</p>}
+            <label>{vacation.original ? "Nova data inicial" : "Data inicial"}<input aria-label="Data inicial das férias" type="date" value={vacation.start} onChange={(event) => setVacation({ ...vacation, start: event.target.value })} /></label><label>{vacation.original ? "Nova data final" : "Data final"}<input aria-label="Data final das férias" type="date" value={vacation.end} onChange={(event) => setVacation({ ...vacation, end: event.target.value })} /></label><div className="call-actions"><button type="button" className="button-secondary" onClick={() => setVacation(null)}>Cancelar</button><button type="button" className="button-primary" onClick={() => { void saveVacation(); }}>{vacation.original ? "Salvar novo período" : "Confirmar férias"}</button></div></fieldset>}
+        </article>;
+      })}</div>
+    </section>
+  </AppShell>;
 }

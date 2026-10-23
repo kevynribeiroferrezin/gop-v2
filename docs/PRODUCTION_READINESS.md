@@ -2,6 +2,13 @@
 
 Use este checklist antes de considerar o ambiente como produção.
 
+Consulte tambem [a revisao de seguranca de 22/10/2026](SECURITY_REVIEW_2026-10-22.md).
+Os SQLs `003_security_hardening.sql` e `005_coordenacao_relatorios.sql` ainda
+dependem de conexao administrativa e inspecao do schema real para aplicacao.
+As alteracoes do banco para coordenacao e relatorios foram autorizadas;
+consulte [o guia atual](COORDENACAO_RELATORIOS.md). O script `security:check` usa service role
+e verifica disponibilidade de objetos; sozinho nao comprova protecao por RLS.
+
 ## Supabase
 
 1. Execute `supabase/sql/001_security_audit_rls.sql` no SQL Editor.

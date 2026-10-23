@@ -57,10 +57,11 @@ test("policies impedem supervisor de escrever registros de outro supervisor", ()
 test("configuracao de producao inclui Vercel e headers defensivos", () => {
   const vercel = readFileSync("vercel.json", "utf8");
   const nextConfig = readFileSync("next.config.ts", "utf8");
+  const proxy = readFileSync("proxy.ts", "utf8");
 
   assert.match(vercel, /"framework": "nextjs"/);
   assert.match(vercel, /"buildCommand": "npm run build"/);
-  assert.match(nextConfig, /Content-Security-Policy/);
+  assert.match(proxy, /Content-Security-Policy/);
   assert.match(nextConfig, /Strict-Transport-Security/);
   assert.match(nextConfig, /Cache-Control/);
 });

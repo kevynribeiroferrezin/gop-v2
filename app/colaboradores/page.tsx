@@ -1,20 +1,24 @@
 "use client";
-import Sidebar from "../../src/components/Sidebar";
+import AppShell, { PageLoading } from "../../src/components/AppShell";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  ArrowLeft,
-  Loader2,
   Search,
 } from "lucide-react";
 import { supabase } from "../../src/lib/supabase/client";
 import { GENERIC_DATA_ERROR, GENERIC_SAVE_ERROR } from "../../src/lib/errors";
 import { registrarAuditoria } from "../../src/lib/audit";
+import EmployeeWorkFields from "../../src/components/EmployeeWorkFields";
+import { WORK_MODES, type WorkMode } from "../../src/lib/workspace-types";
+import { employeeList } from "../../src/lib/workspace-data";
+import EmployeeQuickEdit from "../../src/components/EmployeeQuickEdit";
 
 type Colaborador = {
   id: string;
   matricula: string;
   nome: string;
+  nome_smart: string | null;
+  modalidade_trabalho: WorkMode;
   cargo_id: number;
   cargo_codigo: string;
   cargo_nome: string;
@@ -25,8 +29,6 @@ type Colaborador = {
   status: string;
   ativo: boolean;
   observacao: string | null;
-  created_at: string;
-  updated_at: string;
   regional_id: number | null;
   regional_codigo: string | null;
   regional_nome: string | null;
@@ -42,7 +44,6 @@ type Supervisor = {
   id: string;
   codigo: string | null;
   nome: string;
-  email: string;
 };
 
 type Regional = {
@@ -56,6 +57,10 @@ export default function ColaboradoresPage() {
 
   const [colaboradores, setColaboradores] = useState<Colaborador[]>([]);
   const [busca, setBusca] = useState("");
+  const [canEdit, setCanEdit] = useState(false);
+  const [isSupervisor, setIsSupervisor] = useState(false);
+  const [quickEditing, setQuickEditing] = useState<Colaborador | null>(null);
+  const [workFields, setWorkFields] = useState(false);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [regionais, setRegionais] = useState<Regional[]>([]);
@@ -68,6 +73,8 @@ export default function ColaboradoresPage() {
   const [formEdicao, setFormEdicao] = useState({
     matricula: "",
     nome: "",
+    nome_smart: "",
+    modalidade_trabalho: "nao_informado" as WorkMode,
     cargo_id: "",
     supervisor_id: "",
     data_admissao: "",
@@ -82,6 +89,8 @@ export default function ColaboradoresPage() {
   const [form, setForm] = useState({
     matricula: "",
     nome: "",
+    nome_smart: "",
+    modalidade_trabalho: "nao_informado" as WorkMode,
     cargo_id: "",
     supervisor_id: "",
     data_admissao: "",
@@ -112,13 +121,15 @@ export default function ColaboradoresPage() {
       return;
     }
 
-    if (!profile.ativo || !["admin", "supervisor", "rh"].includes(profile.role)) {
+    if (!profile.ativo || !["admin", "coordenador", "supervisor", "rh"].includes(profile.role)) {
       router.push("/acesso-negado");
       return;
     }
 
-    await Promise.all([
-      carregarColaboradores(),
+    setCanEdit(profile.role === "admin" || profile.role === "rh");
+    setIsSupervisor(profile.role === "supervisor");
+    await carregarColaboradores();
+    if (profile.role === "admin" || profile.role === "rh") await Promise.all([
       carregarCargos(),
       carregarSupervisores(),
       carregarRegionais(),
@@ -132,21 +143,13 @@ export default function ColaboradoresPage() {
     setCarregando(true);
     setErro(null);
 
-    const { data, error } = await supabase
-      .from("vw_funcionarios_completo")
-      .select(
-        "id, matricula, nome, cargo_id, cargo_codigo, cargo_nome, supervisor_id, supervisor_codigo, supervisor_nome, data_admissao, status, ativo, observacao, created_at, updated_at, regional_id, regional_codigo, regional_nome"
-      )
-      .order("nome", { ascending: true });
-
-    if (error) {
-      setErro(GENERIC_DATA_ERROR);
-      setCarregando(false);
-      return;
-    }
-
-    setColaboradores((data ?? []) as Colaborador[]);
-    setCarregando(false);
+    try {
+      const result = await employeeList();
+      setColaboradores(result.rows as Colaborador[]);
+      setWorkFields(result.workFields);
+    } catch (error) {
+      setErro(error instanceof Error ? error.message : GENERIC_DATA_ERROR);
+    } finally { setCarregando(false); }
   }
   
   
@@ -182,7 +185,7 @@ export default function ColaboradoresPage() {
   async function carregarSupervisores() {
     const { data, error } = await supabase
       .from("supervisores")
-      .select("id, codigo, nome, email")
+      .select("id, codigo, nome")
       .eq("ativo", true)
       .order("nome", { ascending: true });
 
@@ -195,12 +198,15 @@ export default function ColaboradoresPage() {
   }
 
 function abrirEdicaoColaborador(colaborador: Colaborador) {
+  if (!canEdit) return;
   setErro(null);
   setColaboradorEditando(colaborador);
 
   setFormEdicao({
     matricula: colaborador.matricula,
     nome: colaborador.nome,
+    nome_smart: colaborador.nome_smart ?? "",
+    modalidade_trabalho: colaborador.modalidade_trabalho ?? "nao_informado",
     cargo_id: String(colaborador.cargo_id),
     supervisor_id: colaborador.supervisor_id ?? "",
     data_admissao: colaborador.data_admissao ?? "",
@@ -218,6 +224,8 @@ async function salvarEdicaoColaborador(
   event: React.FormEvent<HTMLFormElement>
 ) {
   event.preventDefault();
+
+  if (!canEdit) return;
 
   if (!colaboradorEditando) {
     return;
@@ -250,6 +258,8 @@ async function salvarEdicaoColaborador(
     .update({
       matricula: formEdicao.matricula.trim(),
       nome: formEdicao.nome.trim(),
+      ...(workFields ? { nome_smart: formEdicao.nome_smart.trim() || null,
+      modalidade_trabalho: formEdicao.modalidade_trabalho } : {}),
       cargo_id: Number(formEdicao.cargo_id),
       supervisor_id: formEdicao.supervisor_id || null,
       data_admissao: formEdicao.data_admissao || null,
@@ -287,6 +297,7 @@ async function salvarEdicaoColaborador(
 }
 
 async function alternarStatusColaborador(colaborador: Colaborador) {
+  if (!canEdit) return;
   const confirmar = window.confirm(
     colaborador.ativo
       ? `Deseja inativar o colaborador ${colaborador.nome}?`
@@ -328,6 +339,7 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
 
   async function cadastrarColaborador(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!canEdit) return;
 
     setSalvando(true);
     setErro(null);
@@ -353,6 +365,8 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
     const { error } = await supabase.from("funcionarios").insert({
       matricula: form.matricula.trim(),
       nome: form.nome.trim(),
+      ...(workFields ? { nome_smart: form.nome_smart.trim() || null,
+      modalidade_trabalho: form.modalidade_trabalho } : {}),
       cargo_id: Number(form.cargo_id),
       supervisor_id: form.supervisor_id || null,
       data_admissao: form.data_admissao || null,
@@ -382,6 +396,8 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
     setForm({
       matricula: "",
       nome: "",
+      nome_smart: "",
+      modalidade_trabalho: "nao_informado" as WorkMode,
       cargo_id: "",
       supervisor_id: "",
       data_admissao: "",
@@ -406,6 +422,7 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
     return colaboradores.filter((item) => {
       return (
         item.nome.toLowerCase().includes(termo) ||
+        item.nome_smart?.toLowerCase().includes(termo) ||
         item.matricula.toLowerCase().includes(termo) ||
         item.cargo_nome.toLowerCase().includes(termo) ||
         item.supervisor_nome?.toLowerCase().includes(termo)
@@ -413,38 +430,18 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
     });
   }, [busca, colaboradores]);
 
-  if (carregando) {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-[#f6f7fb]">
-        <div className="flex items-center gap-3 rounded-2xl bg-white dark:bg-slate-900 px-8 py-6 text-sm font-semibold text-slate-600 dark:text-slate-300 shadow-sm">
-          <Loader2 className="animate-spin text-yellow-500" size={20} />
-          Carregando colaboradores...
-        </div>
-      </main>
-    );
-  }
+  if (carregando) return <PageLoading active="colaboradores" message="Carregando colaboradores…" />;
 
   return (
-    <main className="min-h-screen bg-[#f6f7fb] pb-24 dark:bg-slate-950 lg:pb-0">
-      <div className="flex min-h-screen">
-        <Sidebar active="colaboradores" />
-
-        <section className="flex-1 p-4 lg:p-8">
+    <AppShell active="colaboradores">
           <header className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <button
-                onClick={() => router.push("/")}
-                className="mb-4 flex items-center gap-2 text-sm font-semibold text-slate-500 dark:text-slate-400 transition hover:text-slate-900 dark:text-slate-100"
-              >
-                <ArrowLeft size={18} />
-                Voltar ao dashboard
-              </button>
 
               <p className="text-sm font-semibold text-yellow-600">
                 Cadastro base
               </p>
 
-              <h1 className="mt-1 text-3xl font-black text-slate-900 dark:text-slate-100">
+              <h1 className="mt-1 text-3xl font-semibold text-slate-900 dark:text-slate-100">
                 Colaboradores
               </h1>
 
@@ -453,7 +450,7 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
               </p>
             </div>
 
-            {!modoCadastro && !modoEdicao && (
+            {canEdit && !modoCadastro && !modoEdicao && (
               <button
                 onClick={() => {
                   setErro(null);
@@ -461,7 +458,7 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
                   setColaboradorEditando(null);
                   setModoCadastro(true);
                 }}
-                className="rounded-xl bg-yellow-500 px-5 py-3 text-sm font-black text-slate-950 shadow-[0_10px_25px_rgba(234,179,8,0.25)] transition hover:bg-yellow-400"
+                className="rounded-xl bg-yellow-500 px-5 py-3 text-sm font-semibold text-slate-950 shadow-sm transition hover:bg-yellow-400"
               >
                 Novo colaborador
               </button>
@@ -469,10 +466,12 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
           </header>
 
           {erro && (
-            <div className="mb-4 rounded-2xl border border-red-100 bg-red-50 p-4 text-sm font-semibold text-red-700">
+            <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-red-100 bg-red-50 p-4 text-sm font-semibold text-red-700">
               {erro}
+              {!modoCadastro && !modoEdicao && <button type="button" className="button-secondary" onClick={() => { void carregarColaboradores(); }}>Tentar novamente</button>}
             </div>
           )}
+          {quickEditing && <EmployeeQuickEdit key={quickEditing.id} employee={quickEditing} available={workFields} onClose={() => setQuickEditing(null)} onSaved={carregarColaboradores} />}
 
           {modoCadastro ? (
             <section className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-sm">
@@ -482,7 +481,7 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
                     Novo cadastro
                   </p>
 
-                  <h2 className="mt-1 text-2xl font-black text-slate-900 dark:text-slate-100">
+                  <h2 className="mt-1 text-2xl font-semibold text-slate-900 dark:text-slate-100">
                     Cadastrar colaborador
                   </h2>
 
@@ -494,19 +493,20 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
                 <button
                   type="button"
                   onClick={() => setModoCadastro(false)}
-                  className="rounded-xl border border-slate-200 dark:border-slate-800 px-5 py-3 text-sm font-black text-slate-600 dark:text-slate-300 transition hover:bg-slate-50"
+                  className="rounded-xl border border-slate-200 dark:border-slate-800 px-5 py-3 text-sm font-semibold text-slate-600 dark:text-slate-300 transition hover:bg-slate-50"
                 >
                   Voltar para lista
                 </button>
               </div>
 
               <form onSubmit={cadastrarColaborador} className="space-y-5">
+                {workFields && <EmployeeWorkFields nomeSmart={form.nome_smart} mode={form.modalidade_trabalho} onChange={(values) => setForm((current) => ({ ...current, ...values }))} />}
                 <div className="grid gap-4 md:grid-cols-2">
                   <div>
-                    <label className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
+                    <label htmlFor="colaboradores-field-1" className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
                       Matrícula
                     </label>
-                    <input
+<input id="colaboradores-field-1"
                       value={form.matricula}
                       onChange={(event) =>
                         setForm((atual) => ({
@@ -520,10 +520,10 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
                   </div>
 
                   <div>
-                    <label className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
+                    <label htmlFor="colaboradores-field-2" className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
                       Nome completo
                     </label>
-                    <input
+<input id="colaboradores-field-2"
                       value={form.nome}
                       onChange={(event) =>
                         setForm((atual) => ({
@@ -537,10 +537,10 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
                   </div>
 
                   <div>
-                    <label className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
+                    <label htmlFor="colaboradores-field-3" className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
                       Cargo
                     </label>
-                    <select
+<select id="colaboradores-field-3"
                       value={form.cargo_id}
                       onChange={(event) =>
                         setForm((atual) => ({
@@ -561,10 +561,10 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
                   </div>
 
                   <div>
-                    <label className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
+                    <label htmlFor="colaboradores-field-4" className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
                       Supervisor responsável
                     </label>
-                    <select
+<select id="colaboradores-field-4"
                       value={form.supervisor_id}
                       onChange={(event) =>
                         setForm((atual) => ({
@@ -585,11 +585,10 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
                   </div>
 
                   <div>
-                    <label className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
+                    <label htmlFor="colaboradores-field-5" className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
                       Regional
                     </label>
-
-                    <select
+<select id="colaboradores-field-5"
                       value={form.regional_id}
                       onChange={(event) =>
                         setForm((atual) => ({
@@ -609,10 +608,10 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
                   </div>
 
                   <div>
-                    <label className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
+                    <label htmlFor="colaboradores-field-6" className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
                       Data de admissão
                     </label>
-                    <input
+<input id="colaboradores-field-6"
                       type="date"
                       value={form.data_admissao}
                       onChange={(event) =>
@@ -626,10 +625,10 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
                   </div>
 
                   <div>
-                    <label className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
+                    <label htmlFor="colaboradores-field-7" className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
                       Status
                     </label>
-                    <select
+<select id="colaboradores-field-7"
                       value={form.status}
                       onChange={(event) =>
                         setForm((atual) => ({
@@ -649,10 +648,10 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
                 </div>
 
                 <div>
-                  <label className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
+                  <label htmlFor="colaboradores-field-8" className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
                     Observação
                   </label>
-                  <textarea
+<textarea id="colaboradores-field-8"
                     value={form.observacao}
                     onChange={(event) =>
                       setForm((atual) => ({
@@ -670,7 +669,7 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
                   <button
                     type="button"
                     onClick={() => setModoCadastro(false)}
-                    className="rounded-xl border border-slate-200 dark:border-slate-800 px-5 py-3 text-sm font-black text-slate-600 dark:text-slate-300 transition hover:bg-slate-50"
+                    className="rounded-xl border border-slate-200 dark:border-slate-800 px-5 py-3 text-sm font-semibold text-slate-600 dark:text-slate-300 transition hover:bg-slate-50"
                   >
                     Cancelar
                   </button>
@@ -678,7 +677,7 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
                   <button
                     type="submit"
                     disabled={salvando}
-                    className="rounded-xl bg-yellow-500 px-5 py-3 text-sm font-black text-slate-950 shadow-[0_10px_25px_rgba(234,179,8,0.25)] transition hover:bg-yellow-400 disabled:cursor-not-allowed disabled:opacity-60"
+                    className="rounded-xl bg-yellow-500 px-5 py-3 text-sm font-semibold text-slate-950 shadow-sm transition hover:bg-yellow-400 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {salvando ? "Salvando..." : "Salvar colaborador"}
                   </button>
@@ -693,7 +692,7 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
                         Editar cadastro
                       </p>
 
-                      <h2 className="mt-1 text-2xl font-black text-slate-900 dark:text-slate-100">
+                      <h2 className="mt-1 text-2xl font-semibold text-slate-900 dark:text-slate-100">
                         Editar colaborador
                       </h2>
 
@@ -708,19 +707,20 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
                         setModoEdicao(false);
                         setColaboradorEditando(null);
                       }}
-                      className="rounded-xl border border-slate-200 dark:border-slate-800 px-5 py-3 text-sm font-black text-slate-600 dark:text-slate-300 transition hover:bg-slate-50"
+                      className="rounded-xl border border-slate-200 dark:border-slate-800 px-5 py-3 text-sm font-semibold text-slate-600 dark:text-slate-300 transition hover:bg-slate-50"
                     >
                       Voltar para lista
                     </button>
                   </div>
 
                   <form onSubmit={salvarEdicaoColaborador} className="space-y-5">
+                    {workFields && <EmployeeWorkFields nomeSmart={formEdicao.nome_smart} mode={formEdicao.modalidade_trabalho} onChange={(values) => setFormEdicao((current) => ({ ...current, ...values }))} />}
                     <div className="grid gap-4 md:grid-cols-2">
                       <div>
-                        <label className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
+                        <label htmlFor="colaboradores-field-9" className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
                           Matrícula
                         </label>
-                        <input
+<input id="colaboradores-field-9"
                           value={formEdicao.matricula}
                           onChange={(event) =>
                             setFormEdicao((atual) => ({
@@ -733,10 +733,10 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
                       </div>
 
                       <div>
-                        <label className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
+                        <label htmlFor="colaboradores-field-10" className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
                           Nome completo
                         </label>
-                        <input
+<input id="colaboradores-field-10"
                           value={formEdicao.nome}
                           onChange={(event) =>
                             setFormEdicao((atual) => ({
@@ -749,10 +749,10 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
                       </div>
 
                       <div>
-                        <label className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
+                        <label htmlFor="colaboradores-field-11" className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
                           Cargo
                         </label>
-                        <select
+<select id="colaboradores-field-11"
                           value={formEdicao.cargo_id}
                           onChange={(event) =>
                             setFormEdicao((atual) => ({
@@ -772,10 +772,10 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
                       </div>
 
                       <div>
-                        <label className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
+                        <label htmlFor="colaboradores-field-12" className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
                           Supervisor responsável
                         </label>
-                        <select
+<select id="colaboradores-field-12"
                           value={formEdicao.supervisor_id}
                           onChange={(event) =>
                             setFormEdicao((atual) => ({
@@ -795,11 +795,10 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
                         </select>
                       </div>
                       <div>
-                        <label className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
+                        <label htmlFor="colaboradores-field-13" className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
                           Regional
                         </label>
-
-                        <select
+<select id="colaboradores-field-13"
                           value={formEdicao.regional_id}
                           onChange={(event) =>
                             setFormEdicao((atual) => ({
@@ -818,10 +817,10 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
                         </select>
                       </div>            
                       <div>
-                        <label className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
+                        <label htmlFor="colaboradores-field-14" className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
                           Data de admissão
                         </label>
-                        <input
+<input id="colaboradores-field-14"
                           type="date"
                           value={formEdicao.data_admissao}
                           onChange={(event) =>
@@ -835,10 +834,10 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
                       </div>
 
                       <div>
-                        <label className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
+                        <label htmlFor="colaboradores-field-15" className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
                           Status do colaborador
                         </label>
-                        <select
+<select id="colaboradores-field-15"
                           value={formEdicao.status}
                           onChange={(event) =>
                             setFormEdicao((atual) => ({
@@ -857,10 +856,10 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
                       </div>
 
                       <div>
-                        <label className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
+                        <label htmlFor="colaboradores-field-16" className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
                           Ativo no sistema
                         </label>
-                        <select
+<select id="colaboradores-field-16"
                           value={formEdicao.ativo ? "ativo" : "inativo"}
                           onChange={(event) =>
                             setFormEdicao((atual) => ({
@@ -877,10 +876,10 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
                     </div>
 
                     <div>
-                      <label className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
+                      <label htmlFor="colaboradores-field-17" className="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">
                         Observação
                       </label>
-                      <textarea
+<textarea id="colaboradores-field-17"
                         value={formEdicao.observacao}
                         onChange={(event) =>
                           setFormEdicao((atual) => ({
@@ -900,7 +899,7 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
                           setModoEdicao(false);
                           setColaboradorEditando(null);
                         }}
-                        className="rounded-xl border border-slate-200 dark:border-slate-800 px-5 py-3 text-sm font-black text-slate-600 dark:text-slate-300 transition hover:bg-slate-50"
+                        className="rounded-xl border border-slate-200 dark:border-slate-800 px-5 py-3 text-sm font-semibold text-slate-600 dark:text-slate-300 transition hover:bg-slate-50"
                       >
                         Cancelar
                       </button>
@@ -908,7 +907,7 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
                       <button
                         type="submit"
                         disabled={salvando}
-                        className="rounded-xl bg-yellow-500 px-5 py-3 text-sm font-black text-slate-950 shadow-[0_10px_25px_rgba(234,179,8,0.25)] transition hover:bg-yellow-400 disabled:cursor-not-allowed disabled:opacity-60"
+                        className="rounded-xl bg-yellow-500 px-5 py-3 text-sm font-semibold text-slate-950 shadow-sm transition hover:bg-yellow-400 disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         {salvando ? "Salvando..." : "Salvar alterações"}
                       </button>
@@ -919,12 +918,12 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
             <section className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
               <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                 <div>
-                  <h2 className="text-lg font-black text-slate-900 dark:text-slate-100">
+                  <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
                     Lista de colaboradores
                   </h2>
 
                   <p className="text-sm text-slate-500 dark:text-slate-400">
-                    Total encontrado: {colaboradoresFiltrados.length}
+                    {erro ? "Não foi possível atualizar a lista" : `${colaboradoresFiltrados.length} colaboradores encontrados`}
                   </p>
                 </div>
 
@@ -943,29 +942,31 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
                 </div>
               </div>
 
-              <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800">
-                <table className="min-w-[920px] w-full border-collapse text-center text-sm">
+              <div className="data-table-wrap overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800">
+                <table className="data-table min-w-[920px] w-full border-collapse text-center text-sm">
                   <thead className="bg-slate-50 dark:bg-slate-800">
                     <tr>
-                      <th className="px-4 py-3 text-center font-black text-slate-600 dark:text-slate-300">
+                      <th className="px-4 py-3 text-center font-semibold text-slate-600 dark:text-slate-300">
                         Matrícula
                       </th>
-                      <th className="px-4 py-3 text-center font-black text-slate-600 dark:text-slate-300">
+                      <th className="px-4 py-3 text-center font-semibold text-slate-600 dark:text-slate-300">
                         Nome
                       </th>
-                      <th className="px-4 py-3 text-center font-black text-slate-600 dark:text-slate-300">
+                      <th className="px-4 py-3 text-center font-semibold text-slate-600 dark:text-slate-300">Nome Smart</th>
+                      <th className="px-4 py-3 text-center font-semibold text-slate-600 dark:text-slate-300">Modalidade</th>
+                      <th className="px-4 py-3 text-center font-semibold text-slate-600 dark:text-slate-300">
                         Cargo
                       </th>
-                      <th className="px-4 py-3 text-center font-black text-slate-600 dark:text-slate-300">
+                      <th className="px-4 py-3 text-center font-semibold text-slate-600 dark:text-slate-300">
                         Supervisor
                       </th>
-                      <th className="px-4 py-3 text-center font-black text-slate-600 dark:text-slate-300">
+                      <th className="px-4 py-3 text-center font-semibold text-slate-600 dark:text-slate-300">
                         Regional
                       </th>
-                      <th className="px-4 py-3 text-center font-black text-slate-600 dark:text-slate-300">
+                      <th className="px-4 py-3 text-center font-semibold text-slate-600 dark:text-slate-300">
                         Status
                       </th>
-                      <th className="px-4 py-3 text-center font-black text-slate-600 dark:text-slate-300">
+                      <th className="px-4 py-3 text-center font-semibold text-slate-600 dark:text-slate-300">
                         Ações
                       </th>
                     </tr>
@@ -977,12 +978,12 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
                         key={item.id}
                         className="transition hover:bg-slate-50 dark:hover:bg-slate-800"
                       >
-                        <td className="px-4 py-4 text-center font-bold text-slate-700 dark:text-slate-200">
+                        <td data-label="Matrícula" className="px-4 py-4 text-center font-bold text-slate-700 dark:text-slate-200">
                           {item.matricula}
                         </td>
 
-                        <td className="px-4 py-4 text-center">
-                          <p className="font-black text-slate-900 dark:text-slate-100">
+                        <td data-label="Nome" className="px-4 py-4 text-center">
+                          <p className="font-semibold text-slate-900 dark:text-slate-100">
                             {item.nome}
                           </p>
                           <p className="text-xs text-slate-400">
@@ -994,22 +995,24 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
                           </p>
                         </td>
 
-                        <td className="px-4 py-4 text-center">
-                          <span className="rounded-full bg-yellow-50 px-3 py-1 text-xs font-black text-yellow-700">
+                        <td data-label="Nome Smart" className="px-4 py-4 text-center">{item.nome_smart || "—"}</td>
+                        <td data-label="Modalidade" className="px-4 py-4 text-center">{WORK_MODES[item.modalidade_trabalho] ?? "Não informado"}</td>
+                        <td data-label="Cargo" className="px-4 py-4 text-center">
+                          <span className="rounded-full bg-yellow-50 px-3 py-1 text-xs font-semibold text-yellow-700">
                             {item.cargo_nome}
                           </span>
                         </td>
                                 
-                        <td className="px-4 py-4 text-center text-slate-600 dark:text-slate-300">
+                        <td data-label="Supervisor" className="px-4 py-4 text-center text-slate-600 dark:text-slate-300">
                           {item.supervisor_nome ?? "Sem supervisor"}
                         </td>
 
-                        <td className="px-4 py-4 text-center text-slate-600 dark:text-slate-300">
+                        <td data-label="Regional" className="px-4 py-4 text-center text-slate-600 dark:text-slate-300">
                           {item.regional_nome ?? "Sem regional"}
                         </td>         
-                        <td className="px-4 py-4 text-center">
+                        <td data-label="Status" className="px-4 py-4 text-center">
                           <span
-                            className={`rounded-full px-3 py-1 text-xs font-black ${
+                            className={`rounded-full px-3 py-1 text-xs font-semibold ${
                               item.ativo && item.status === "ativo"
                                 ? "bg-green-50 text-green-700"
                                 : "bg-slate-100 text-slate-600 dark:text-slate-300"
@@ -1018,12 +1021,12 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
                             {item.ativo ? item.status : "inativo"}
                           </span>
                         </td>
-                        <td className="px-4 py-4 text-center">
-                          <div className="flex items-center justify-center gap-2">
+                        <td data-label="Ações" className="px-4 py-4 text-center">
+                          {canEdit ? <div className="flex items-center justify-center gap-2">
                             <button
                               type="button"
                               onClick={() => abrirEdicaoColaborador(item)}
-                              className="rounded-xl bg-slate-100 px-3 py-2 text-xs font-black text-slate-700 transition hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
+                              className="rounded-xl bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
                             >
                               Editar
                             </button>
@@ -1031,7 +1034,7 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
                             <button
                               type="button"
                               onClick={() => alternarStatusColaborador(item)}
-                              className={`rounded-xl px-3 py-2 text-xs font-black transition ${
+                              className={`rounded-xl px-3 py-2 text-xs font-semibold transition ${
                                 item.ativo
                                   ? "bg-red-50 text-red-700 hover:bg-red-100"
                                   : "bg-green-50 text-green-700 hover:bg-green-100"
@@ -1039,7 +1042,7 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
                             >
                               {item.ativo ? "Inativar" : "Ativar"}
                             </button>
-                          </div>
+                          </div> : isSupervisor ? <button type="button" className="button-secondary" onClick={() => setQuickEditing(item)}>Editar dados</button> : <span className="text-xs text-slate-500 dark:text-slate-400">Consulta</span>}
                         </td>
                       </tr>
                     ))}
@@ -1047,10 +1050,10 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
                     {colaboradoresFiltrados.length === 0 && (
                       <tr>
                         <td
-                          colSpan={7}
+                          colSpan={9}
                           className="px-4 py-10 text-center text-sm font-semibold text-slate-500 dark:text-slate-400"
                         >
-                          Nenhum colaborador encontrado.
+                          {erro ? "A lista não pôde ser carregada." : "Nenhum colaborador encontrado para esta busca."}
                         </td>
                       </tr>
                     )}
@@ -1059,8 +1062,6 @@ async function alternarStatusColaborador(colaborador: Colaborador) {
               </div>
             </section>
           )}
-        </section>
-      </div>
-    </main>
+        </AppShell>
   );
 }

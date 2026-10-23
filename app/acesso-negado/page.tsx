@@ -2,12 +2,15 @@
 
 import { useRouter } from "next/navigation";
 import { ShieldAlert } from "lucide-react";
+import Brand from "../../src/components/Brand";
+import ThemeToggle from "../../src/components/ThemeToggle";
 
 export default function AcessoNegadoPage() {
   const router = useRouter();
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-[#f6f7fb] px-4">
+    <main className="standalone-page">
+      <div className="standalone-toolbar"><Brand /><ThemeToggle /></div>
       <div className="w-full max-w-md rounded-3xl bg-white dark:bg-slate-900 p-8 text-center shadow-sm">
         <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-red-50 text-red-600">
           <ShieldAlert size={34} />
@@ -24,9 +27,9 @@ export default function AcessoNegadoPage() {
 
         <button
           onClick={() => router.push("/")}
-          className="mt-6 rounded-xl bg-yellow-500 px-5 py-3 text-sm font-black text-slate-950 transition hover:bg-yellow-400"
+          className="button-primary mt-6"
         >
-          Voltar ao dashboard
+          Voltar à visão geral
         </button>
       </div>
     </main>
